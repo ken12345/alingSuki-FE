@@ -224,9 +224,10 @@ export class Ledger {
     return null;
   }
 
-  addItem(emoji: string, name: string, price: number, cost: number, stock: number): string | null {
+  addItem(emoji: string, name: string, price: number, cost: number, stock: number, photo?: string): string | null {
     if (!name.trim() || !(price > 0)) return 'Enter a name and a price.';
     const item: Item = { id: crypto.randomUUID(), emoji: emoji || '🛍️', name: name.trim(), price, cost: cost || 0, stock: stock || 0, updatedAt: Date.now() };
+    if (photo) item.photo = photo;
     this.items.update((all) => [...all, item]);
     this.commit((db) => db.items.put(item), [this.outboxRow('item', item)]);
     return null;
@@ -237,6 +238,7 @@ export class Ledger {
     if (!item.name.trim() || !(item.price > 0)) return 'Enter a name and a price.';
     if (item.stock < 0 || item.cost < 0) return 'Cost and stock cannot be negative.';
     const clean: Item = { ...item, name: item.name.trim(), updatedAt: Date.now() };
+    if (!clean.photo) delete clean.photo; // no photo means none is stored, not an empty one
     this.items.update((all) => all.map((i) => (i.id === clean.id ? clean : i)));
     this.commit((db) => db.items.put(clean), [this.outboxRow('item', clean)]);
     return null;

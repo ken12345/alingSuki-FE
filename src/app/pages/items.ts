@@ -2,12 +2,14 @@ import { CurrencyPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Ledger } from '../core/ledger';
+import { photoFromFile } from '../core/image';
 import { Item } from '../core/models';
+import { ItemThumb } from '../shared/item-thumb';
 import { PageHeader } from '../shared/page-header';
 
 @Component({
   selector: 'app-items',
-  imports: [CurrencyPipe, FormsModule, PageHeader],
+  imports: [CurrencyPipe, FormsModule, PageHeader, ItemThumb],
   template: `
     <app-page-header title="Items" back="/more">
       <button type="button" class="icon-btn primary" (click)="openNew()" aria-label="Add item"><i class="bi bi-plus-lg"></i></button>
@@ -16,10 +18,18 @@ import { PageHeader } from '../shared/page-header';
       @if (ledger.lowStock().length) {
         <div class="alert alert-warning py-2 mb-0 small fw-semibold"><i class="bi bi-exclamation-triangle"></i> {{ ledger.lowStock().length }} {{ ledger.lowStock().length === 1 ? 'item is' : 'items are' }} running low or out. Tap an item to add stock.</div>
       }
+      @if (ledger.items().length === 0) {
+        <div class="empty-state">
+          <i class="bi bi-box-seam"></i>
+          <h2>No items yet</h2>
+          <p>Add the things you sell, with their price, so you can ring up a sale in one tap.</p>
+          <button type="button" class="btn btn-primary" (click)="openNew()"><i class="bi bi-plus-lg"></i> Add your first item</button>
+        </div>
+      }
       <div class="d-flex flex-column gap-2">
         @for (i of ledger.items(); track i.id) {
           <button type="button" class="row-card text-start w-100" (click)="openEdit(i)">
-            <div class="avatar">{{ i.emoji }}</div>
+            <div class="avatar"><app-item-thumb [item]="i" /></div>
             <div class="grow">
               <div class="fw-bold">{{ i.name }}</div>
               <div class="sub">Cost {{ i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }} · Profit {{ i.price - i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}</div>
@@ -37,10 +47,21 @@ import { PageHeader } from '../shared/page-header';
       <div class="sheet-dim" (click)="close()"></div>
       <form class="sheet d-flex flex-column gap-2" (ngSubmit)="save()">
         <h2 class="h5 fw-bold mb-1">{{ isNew() ? 'New item' : 'Edit ' + original()?.name }}</h2>
-        <div class="d-flex gap-2">
-          <input class="form-control text-center" style="max-width: 72px" name="emoji" placeholder="🛍️" maxlength="2" [(ngModel)]="emoji" aria-label="Emoji">
-          <input class="form-control" name="name" placeholder="Item name" [(ngModel)]="name" autocomplete="off" required aria-label="Item name">
+        <div class="d-flex gap-2 align-items-start">
+          <label class="photo-pick" [class.has]="photo()" [attr.aria-label]="photo() ? 'Change photo' : 'Add a photo'">
+            @if (photo()) { <img [src]="photo()" alt="Item photo"> } @else { <i class="bi bi-camera"></i><span>Photo</span> }
+            <input type="file" accept="image/*" class="d-none" (change)="pickPhoto($event)">
+          </label>
+          <div class="flex-grow-1 d-flex flex-column gap-2">
+            <input class="form-control" name="name" placeholder="Item name" [(ngModel)]="name" autocomplete="off" required aria-label="Item name">
+            @if (photo()) {
+              <button type="button" class="btn btn-sm btn-outline-secondary align-self-start" (click)="photo.set('')"><i class="bi bi-x-lg"></i> Remove photo</button>
+            } @else {
+              <input class="form-control" style="max-width: 150px" name="emoji" placeholder="or an emoji 🛍️" maxlength="2" [(ngModel)]="emoji" aria-label="Emoji">
+            }
+          </div>
         </div>
+        @if (photoError()) { <div class="text-danger small fw-semibold" role="alert">{{ photoError() }}</div> }
         <div class="row g-2">
           <div class="col-6"><label class="label" for="price">Price</label><input id="price" class="form-control" name="price" type="number" inputmode="decimal" min="0" [(ngModel)]="price"></div>
           <div class="col-6"><label class="label" for="cost">Cost</label><input id="cost" class="form-control" name="cost" type="number" inputmode="decimal" min="0" [(ngModel)]="cost"></div>
@@ -82,6 +103,9 @@ export class Items {
   protected readonly original = computed(() => this.ledger.items().find((i) => i.id === this.editing()));
 
   protected emoji = signal('');
+  /** The item's photo as a small JPEG data URL, or '' for none. */
+  protected photo = signal('');
+  protected readonly photoError = signal('');
   protected name = signal('');
   protected price = signal<number | null>(null);
   protected cost = signal<number | null>(null);
@@ -92,12 +116,12 @@ export class Items {
   protected readonly addedStock = computed(() => Math.max(0, (this.stock() ?? 0) - (this.original()?.stock ?? 0)));
 
   protected openNew(): void {
-    this.fill({ emoji: '', name: '', price: null, cost: null, stock: null });
+    this.fill({ emoji: '', photo: '', name: '', price: null, cost: null, stock: null });
     this.editing.set('new');
   }
 
   protected openEdit(item: Item): void {
-    this.fill(item);
+    this.fill({ ...item, photo: item.photo ?? '' });
     this.editing.set(item.id);
   }
 
@@ -123,16 +147,31 @@ export class Items {
     const id = this.editing();
     const problem =
       id === 'new'
-        ? this.ledger.addItem(this.emoji(), this.name(), this.price() ?? 0, this.cost() ?? 0, this.stock() ?? 0)
+        ? this.ledger.addItem(this.emoji(), this.name(), this.price() ?? 0, this.cost() ?? 0, this.stock() ?? 0, this.photo() || undefined)
         : this.ledger.updateItem({
-            id: id!, emoji: this.emoji() || '🛍️', name: this.name(), price: this.price() ?? 0, cost: this.cost() ?? 0, stock: this.stock() ?? 0,
+            id: id!, emoji: this.emoji() || '🛍️', photo: this.photo() || undefined, name: this.name(), price: this.price() ?? 0, cost: this.cost() ?? 0, stock: this.stock() ?? 0,
           });
     if (problem) return this.error.set(problem);
     this.ledger.showToast(id === 'new' ? `${this.name().trim()} added` : 'Item updated');
     this.close();
   }
 
-  private fill(v: { emoji: string; name: string; price: number | null; cost: number | null; stock: number | null }): void {
+  protected async pickPhoto(event: Event): Promise<void> {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    this.photoError.set('');
+    try {
+      this.photo.set(await photoFromFile(file));
+    } catch (error) {
+      this.photoError.set(error instanceof Error ? error.message : 'That photo could not be used.');
+    }
+  }
+
+  private fill(v: { emoji: string; photo: string; name: string; price: number | null; cost: number | null; stock: number | null }): void {
+    this.photoError.set('');
+    this.photo.set(v.photo);
     this.emoji.set(v.emoji);
     this.name.set(v.name);
     this.price.set(v.price);

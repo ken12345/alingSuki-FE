@@ -16,6 +16,8 @@ export interface Item {
   price: number;
   cost: number;
   stock: number;
+  /** A small square JPEG thumbnail as a data URL (see image.ts). When missing, the emoji is shown instead. */
+  photo?: string;
   /** When this item was last edited on a phone (ms). Missing on old records. */
   updatedAt?: number;
 }

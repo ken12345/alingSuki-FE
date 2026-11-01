@@ -1,24 +1,33 @@
 import { CurrencyPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
-import { Router } from '@angular/router';
+import { Router, RouterLink } from '@angular/router';
 import { Ledger } from '../core/ledger';
 import { Item, Method } from '../core/models';
+import { ItemThumb } from '../shared/item-thumb';
 import { PageHeader } from '../shared/page-header';
 
 @Component({
   selector: 'app-sale',
-  imports: [CurrencyPipe, FormsModule, PageHeader],
+  imports: [CurrencyPipe, FormsModule, PageHeader, ItemThumb, RouterLink],
   template: `
     <div class="page">
       <app-page-header title="New sale" back="/" />
       <div class="page-body">
+        @if (ledger.items().length === 0) {
+          <div class="empty-state">
+            <i class="bi bi-box-seam"></i>
+            <h2>No items yet</h2>
+            <p>Add what you sell, with its price, and then you can record sales here in one tap.</p>
+            <a class="btn btn-primary" routerLink="/items"><i class="bi bi-plus-lg"></i> Add your first item</a>
+          </div>
+        } @else {
         <input class="form-control" type="search" placeholder="Search items..." [(ngModel)]="query" aria-label="Search items">
         <div class="prod-grid">
           @for (item of shown(); track item.id) {
             <div class="prod" [class.on]="cart()[item.id]" [class.out]="item.stock === 0">
               <button type="button" class="prod-add" [disabled]="item.stock === 0" (click)="add(item)">
-                <span class="emoji">{{ item.emoji }}</span>{{ item.name }}
+                <app-item-thumb [item]="item" />{{ item.name }}
                 <span class="price">{{ item.stock === 0 ? 'Out of stock' : (item.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2') }}</span>
               </button>
               @if (cart()[item.id]; as qty) {
@@ -31,8 +40,13 @@ import { PageHeader } from '../shared/page-header';
             </div>
           }
         </div>
+        @if (shown().length === 0) {
+          <div class="text-secondary text-center py-4">No items match "{{ query() }}".</div>
+        }
+        }
       </div>
 
+      @if (ledger.items().length > 0) {
       <div class="bar-bottom">
         <div class="chips">
           <button type="button" class="chip" [class.on]="method() === 'cash'" (click)="method.set('cash')">Cash</button>
@@ -49,6 +63,7 @@ import { PageHeader } from '../shared/page-header';
         <div class="d-flex justify-content-between fw-bold fs-5"><span>{{ count() }} {{ count() === 1 ? 'item' : 'items' }}</span><span>{{ total() | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}</span></div>
         <button type="button" class="btn btn-primary" [disabled]="count() === 0" (click)="confirm()">Confirm</button>
       </div>
+      }
     </div>
   `,
 })
