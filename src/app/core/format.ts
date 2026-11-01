@@ -1,6 +1,11 @@
 export const HOUR = 3_600_000;
 export const DAY = 24 * HOUR;
 
+/** ₱1,234 or ₱1,234.50: whole pesos without decimals, otherwise two. */
+export function peso(amount: number): string {
+  return '₱' + amount.toLocaleString('en-PH', { minimumFractionDigits: Number.isInteger(amount) ? 0 : 2, maximumFractionDigits: 2 });
+}
+
 export function startOfDay(time = Date.now()): number {
   const d = new Date(time);
   d.setHours(0, 0, 0, 0);

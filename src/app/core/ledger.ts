@@ -1,12 +1,13 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { AppDb } from './db';
 import { daysAgo, startOfDay } from './format';
-import { Backup, Customer, Entry, Item, Line, ListItem, Method, OutboxRow, RecordKind, RemoteChange } from './models';
+import { Backup, Customer, Entry, Item, ItemDetails, Line, ListItem, Method, OutboxRow, RecordKind, RemoteChange } from './models';
+import { costFromPack, hasBuyUnit, perPack, plural } from './units';
 
 const OVERDUE_AFTER_DAYS = 7;
 /** An item with this many left or fewer counts as running low. */
 const LOW_STOCK = 5;
-/** How many of an item the list suggests buying when it is added from the item list. */
+/** How many of an item (not bought in packs) the list suggests buying when it is added from the item list. */
 const DEFAULT_BUY_QTY = 10;
 
 @Injectable({ providedIn: 'root' })
@@ -234,21 +235,20 @@ export class Ledger {
     return null;
   }
 
-  addItem(emoji: string, name: string, price: number, cost: number, stock: number, photo?: string): string | null {
-    if (!name.trim() || !(price > 0)) return 'Enter a name and a price.';
-    const item: Item = { id: crypto.randomUUID(), emoji: emoji || '🛍️', name: name.trim(), price, cost: cost || 0, stock: stock || 0, updatedAt: Date.now() };
-    if (photo) item.photo = photo;
+  addItem(details: ItemDetails): string | null {
+    const problem = this.itemProblem(details);
+    if (problem) return problem;
+    const item: Item = { ...this.cleanItem(details), id: crypto.randomUUID(), updatedAt: Date.now() };
     this.items.update((all) => [...all, item]);
     this.commit((db) => db.items.put(item), [this.outboxRow('item', item)]);
     return null;
   }
 
-  /** Replaces an existing item's details (price, cost, stock, name). Returns an error message, or null on success. */
+  /** Replaces an existing item's details (price, units, stock, name). Returns an error message, or null on success. */
   updateItem(item: Item): string | null {
-    if (!item.name.trim() || !(item.price > 0)) return 'Enter a name and a price.';
-    if (item.stock < 0 || item.cost < 0) return 'Cost and stock cannot be negative.';
-    const clean: Item = { ...item, name: item.name.trim(), updatedAt: Date.now() };
-    if (!clean.photo) delete clean.photo; // no photo means none is stored, not an empty one
+    const problem = this.itemProblem(item);
+    if (problem) return problem;
+    const clean: Item = { ...this.cleanItem(item), id: item.id, updatedAt: Date.now() };
     this.items.update((all) => all.map((i) => (i.id === clean.id ? clean : i)));
     this.commit((db) => db.items.put(clean), [this.outboxRow('item', clean)]);
     return null;
@@ -351,7 +351,9 @@ export class Ledger {
       this.saveListItem({ ...same, done: false, qty: qty ?? same.qty }); // bought before: it goes back on the list
       return null;
     }
-    this.saveListItem({ id: crypto.randomUUID(), name: clean, qty: qty ?? (itemId ? DEFAULT_BUY_QTY : 1), done: false, ...(itemId ? { itemId } : {}) });
+    const linked = itemId ? this.items().find((i) => i.id === itemId) : undefined;
+    const suggested = linked && hasBuyUnit(linked) ? 1 : itemId ? DEFAULT_BUY_QTY : 1; // one pack for pack items, else a handful
+    this.saveListItem({ id: crypto.randomUUID(), name: clean, qty: qty ?? suggested, done: false, ...(itemId ? { itemId } : {}) });
     return null;
   }
 
@@ -395,7 +397,8 @@ export class Ledger {
     const restocked = new Map<string, Item>();
     for (const line of bought) {
       const item = items.get(line.itemId as string);
-      if (item) restocked.set(item.id, { ...item, stock: item.stock + line.qty, updatedAt: now });
+      // The list counts what is bought (3 packs); stock counts what is sold (60 sticks).
+      if (item) restocked.set(item.id, { ...item, stock: item.stock + line.qty * perPack(item), updatedAt: now });
     }
     const ids = new Set(bought.map((l) => l.id));
     this.items.update((all) => all.map((i) => restocked.get(i.id) ?? i));
@@ -405,6 +408,36 @@ export class Ledger {
       [...[...restocked.values()].map((i) => this.outboxRow('item', i)), ...bought.map((l) => this.outboxRow('listitem', l, true, now))],
     );
     return restocked.size;
+  }
+
+  private itemProblem(d: ItemDetails): string | null {
+    if (!d.name.trim() || !(d.price > 0)) return 'Enter a name and a price.';
+    if (d.stock < 0 || d.cost < 0) return 'Cost and stock cannot be negative.';
+    if (d.buyUnit?.trim() || d.perBuyUnit) {
+      if (!d.buyUnit?.trim() || !((d.perBuyUnit ?? 0) >= 1)) {
+        return `Name the bigger unit and say how many ${plural(d.unit?.trim() || 'piece', 2)} are inside it.`;
+      }
+    }
+    return null;
+  }
+
+  /** Drops empty optional fields (so they are not stored or synced) and works out the cost of one selling unit from the pack price. */
+  private cleanItem<T extends ItemDetails>(d: T): T {
+    const out: T = { ...d, name: d.name.trim(), emoji: d.emoji || '🛍️' };
+    for (const key of ['photo', 'unit', 'buyUnit'] as const) {
+      const value = out[key]?.trim();
+      if (value) out[key] = value; else delete out[key];
+    }
+    if (!hasBuyUnit(out)) {
+      delete out.buyUnit; delete out.perBuyUnit; delete out.buyCost;
+    } else {
+      out.perBuyUnit = Math.round(out.perBuyUnit as number);
+      if (out.buyCost !== undefined && out.buyCost >= 0) out.cost = costFromPack(out.buyCost, out.perBuyUnit);
+      else delete out.buyCost;
+    }
+    out.cost = out.cost || 0;
+    out.stock = out.stock || 0;
+    return out;
   }
 
   private saveListItem(line: ListItem): void {

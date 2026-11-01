@@ -28,7 +28,7 @@ import { PageHeader } from '../shared/page-header';
             <div class="prod" [class.on]="cart()[item.id]" [class.out]="item.stock === 0">
               <button type="button" class="prod-add" [disabled]="item.stock === 0" (click)="add(item)">
                 <app-item-thumb [item]="item" />{{ item.name }}
-                <span class="price">{{ item.stock === 0 ? 'Out of stock' : (item.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2') }}</span>
+                <span class="price">{{ item.stock === 0 ? 'Out of stock' : ((item.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2') + (item.unit ? ' / ' + item.unit : '')) }}</span>
               </button>
               @if (cart()[item.id]; as qty) {
                 <div class="stepper">

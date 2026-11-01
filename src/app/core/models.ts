@@ -18,9 +18,21 @@ export interface Item {
   stock: number;
   /** A small square JPEG thumbnail as a data URL (see image.ts). When missing, the emoji is shown instead. */
   photo?: string;
+  /**
+   * Stock is counted in the unit the shop SELLS: "stick", "cup", "sachet". When missing it is plain pieces.
+   */
+  unit?: string;
+  /** The bigger unit the item is BOUGHT in ("pack", "bottle", "gallon"), and how many selling units are inside it. */
+  buyUnit?: string;
+  perBuyUnit?: number;
+  /** The price of one buying unit. The cost of one selling unit (cost) is worked out from it. */
+  buyCost?: number;
   /** When this item was last edited on a phone (ms). Missing on old records. */
   updatedAt?: number;
 }
+
+/** Everything about an item except the id and the time it was last edited. */
+export type ItemDetails = Omit<Item, 'id' | 'updatedAt'>;
 
 /** One line on the shopping list: something to buy at the market. */
 export interface ListItem {

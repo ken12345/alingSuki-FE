@@ -1,7 +1,9 @@
 import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Ledger } from '../core/ledger';
+import { peso } from '../core/format';
 import { Item, ListItem } from '../core/models';
+import { hasBuyUnit, perPack, plural } from '../core/units';
 import { PageHeader } from '../shared/page-header';
 
 @Component({
@@ -39,13 +41,15 @@ import { PageHeader } from '../shared/page-header';
 
       @if (toBuy().length) {
         <h2 class="h6 fw-bold mb-0 mt-1">To buy ({{ toBuy().length }})</h2>
+        @if (estimate() > 0) { <div class="small text-secondary">About {{ peso(estimate()) }} to spend, counting the lines that have a price.</div> }
         <div class="d-flex flex-column gap-2">
           @for (line of toBuy(); track line.id) {
             <div class="row-card">
               <button type="button" class="check" (click)="ledger.toggleListDone(line.id)" [attr.aria-label]="'Mark ' + line.name + ' as bought'"><i class="bi bi-circle"></i></button>
               <div class="grow">
                 <div class="fw-bold">{{ line.name }}</div>
-                @if (stockLeft(line) !== null) { <div class="sub">{{ stockLeft(line) }} left now</div> }
+                @if (buyText(line)) { <div class="sub fw-semibold">{{ buyText(line) }}</div> }
+                @if (leftText(line)) { <div class="sub">{{ leftText(line) }}</div> }
               </div>
               <div class="qty-step">
                 <button type="button" [disabled]="line.qty <= 1" (click)="change(line, -1)" aria-label="One less"><i class="bi bi-dash-lg"></i></button>
@@ -65,7 +69,7 @@ import { PageHeader } from '../shared/page-header';
             <div class="row-card done">
               <button type="button" class="check" (click)="ledger.toggleListDone(line.id)" [attr.aria-label]="'Put ' + line.name + ' back on the list'"><i class="bi bi-check-circle-fill text-success"></i></button>
               <div class="grow"><div class="fw-bold">{{ line.name }}</div></div>
-              <span class="text-secondary fw-semibold">× {{ line.qty }}</span>
+              <span class="text-secondary fw-semibold">× {{ qtyText(line) }}</span>
               <button type="button" class="icon-btn sm" (click)="ledger.removeListItem(line.id)" [attr.aria-label]="'Remove ' + line.name"><i class="bi bi-x-lg"></i></button>
             </div>
           }
@@ -84,6 +88,7 @@ import { PageHeader } from '../shared/page-header';
 export class Shopping {
   protected readonly ledger = inject(Ledger);
 
+  protected readonly peso = peso;
   protected readonly query = signal('');
   protected readonly error = signal('');
 
@@ -135,9 +140,40 @@ export class Shopping {
     this.ledger.changeListQty(line.id, by);
   }
 
-  protected stockLeft(line: ListItem): number | null {
-    return this.ledger.items().find((i) => i.id === line.itemId)?.stock ?? null;
+  private itemOf(line: ListItem): Item | undefined {
+    return line.itemId ? this.ledger.items().find((i) => i.id === line.itemId) : undefined;
   }
+
+  /** What is on the shelf now, in the unit it is sold in: "12 sticks left now". */
+  protected leftText(line: ListItem): string {
+    const item = this.itemOf(line);
+    if (!item) return '';
+    if (item.stock === 0) return 'none left now';
+    return `${item.stock} ${item.unit ? plural(item.unit, item.stock) + ' ' : ''}left now`;
+  }
+
+  /** For items bought in packs: "3 packs = 60 sticks", so the owner sees what she is really getting. */
+  protected buyText(line: ListItem): string {
+    const item = this.itemOf(line);
+    if (!item || !hasBuyUnit(item)) return '';
+    const units = line.qty * perPack(item);
+    return `${line.qty} ${plural(item.buyUnit as string, line.qty)} = ${units} ${plural(item.unit || 'piece', units)}`;
+  }
+
+  protected qtyText(line: ListItem): string {
+    const item = this.itemOf(line);
+    return item && hasBuyUnit(item) ? `${line.qty} ${plural(item.buyUnit as string, line.qty)}` : String(line.qty);
+  }
+
+  /** What one line is expected to cost: the pack price times the packs, or the unit cost times the amount. */
+  private lineCost(line: ListItem): number {
+    const item = this.itemOf(line);
+    if (!item) return 0;
+    if (hasBuyUnit(item)) return (item.buyCost ?? 0) * line.qty;
+    return item.cost > 0 ? item.cost * line.qty : 0;
+  }
+
+  protected readonly estimate = computed(() => this.toBuy().reduce((sum, line) => sum + this.lineCost(line), 0));
 
   protected receive(): void {
     const restocked = this.ledger.receiveBought();
