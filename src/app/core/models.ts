@@ -9,6 +9,12 @@ export interface Customer {
   updatedAt?: number;
 }
 
+/** One way of selling an item: this many pieces for this price (3 pieces for 5 pesos). */
+export interface SellOption {
+  qty: number;
+  price: number;
+}
+
 export interface Item {
   id: string;
   emoji: string;
@@ -22,6 +28,13 @@ export interface Item {
    * Stock is counted in the unit the shop SELLS: "stick", "cup", "sachet". When missing it is plain pieces.
    */
   unit?: string;
+  /**
+   * The price is for this many selling units at a time: 5 pesos for every 3 pieces is price 5 with sellQty 3. Missing means 1.
+   * Stock and the sales records always count single units (pieces), never sets.
+   */
+  sellQty?: number;
+  /** Other prices for the same item next to its regular one: 1 piece for 2 pesos (price) and also 3 for 5 pesos (a deal). Up to 3. */
+  deals?: SellOption[];
   /** The bigger unit the item is BOUGHT in ("pack", "bottle", "gallon"), and how many selling units are inside it. */
   buyUnit?: string;
   perBuyUnit?: number;

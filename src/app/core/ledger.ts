@@ -2,7 +2,7 @@ import { Injectable, computed, inject, signal } from '@angular/core';
 import { AppDb } from './db';
 import { daysAgo, startOfDay } from './format';
 import { Backup, Customer, Entry, Item, ItemDetails, Line, ListItem, Method, OutboxRow, RecordKind, RemoteChange } from './models';
-import { costFromPack, hasBuyUnit, perPack, plural } from './units';
+import { costFromPack, hasBuyUnit, perPack, plural, priceFor, round2, setSize } from './units';
 
 const OVERDUE_AFTER_DAYS = 7;
 /** An item with this many left or fewer counts as running low. */
@@ -180,13 +180,22 @@ export class Ledger {
   addSale(cart: Record<string, number>, method: Method, customerId?: string): string | null {
     const lines: Line[] = [];
     let amount = 0, profit = 0;
-    for (const item of this.items()) {
-      const qty = cart[item.id];
-      if (!qty) continue;
-      lines.push({ name: item.name, qty, amount: item.price * qty });
-      amount += item.price * qty;
-      profit += (item.price - item.cost) * qty;
+    // The cart counts pieces of each item. The price is worked out from how many pieces there are (see priceFor), and stock
+    // and the records count the same single pieces.
+    const pieces = new Map<string, number>();
+    const itemsById = new Map(this.items().map((i) => [i.id, i]));
+    for (const [itemId, count] of Object.entries(cart)) {
+      const item = itemsById.get(itemId);
+      if (!item || !count) continue;
+      if (count > item.stock) return `There is not enough ${item.name} in stock.`;
+      const total = priceFor(item, count).total;
+      pieces.set(itemId, count);
+      lines.push({ name: item.name, qty: count, amount: total });
+      amount += total;
+      profit += total - item.cost * count;
     }
+    amount = round2(amount);
+    profit = round2(profit);
     if (!lines.length) return 'Add at least one item.';
     if (method === 'credit') {
       const limitError = this.checkCredit(customerId, amount);
@@ -197,7 +206,7 @@ export class Ledger {
       id: crypto.randomUUID(), customerId: method === 'credit' ? customerId : undefined,
       type: method === 'credit' ? 'charge' : 'sale', method, amount, profit, note: '', date: now, lines,
     };
-    const soldItems = this.items().filter((i) => cart[i.id]).map((i) => ({ ...i, stock: Math.max(0, i.stock - cart[i.id]), updatedAt: now }));
+    const soldItems = this.items().filter((i) => pieces.has(i.id)).map((i) => ({ ...i, stock: Math.max(0, i.stock - (pieces.get(i.id) as number)), updatedAt: now }));
     const byId = new Map(soldItems.map((i) => [i.id, i]));
     this.entries.update((all) => [...all, entry]);
     this.items.update((all) => all.map((i) => byId.get(i.id) ?? i));
@@ -428,6 +437,15 @@ export class Ledger {
       const value = out[key]?.trim();
       if (value) out[key] = value; else delete out[key];
     }
+    if (out.sellQty !== undefined && out.sellQty >= 2) out.sellQty = Math.round(out.sellQty); else delete out.sellQty;
+    // Extra prices: keep complete ones, no repeats of the regular price's size or of each other, at most three.
+    const seen = new Set<number>([setSize(out)]);
+    const deals = (out.deals ?? [])
+      .filter((d) => d.qty >= 1 && d.price > 0)
+      .map((d) => ({ qty: Math.round(d.qty), price: d.price }))
+      .filter((d) => !seen.has(d.qty) && !!seen.add(d.qty))
+      .slice(0, 3);
+    if (deals.length) out.deals = deals; else delete out.deals;
     if (!hasBuyUnit(out)) {
       delete out.buyUnit; delete out.perBuyUnit; delete out.buyCost;
     } else {

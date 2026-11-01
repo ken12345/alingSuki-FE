@@ -150,3 +150,13 @@ app-root { display: block; height: 100%; }
 .icon-btn.sm { width: 32px; height: 32px; font-size: .85rem; flex: none; }
 .row-card.done .fw-bold { text-decoration: line-through; color: var(--bs-secondary-color); }
 .flex-none { flex: none; }
+
+/* sale tile: the other prices, and the working behind the total */
+.prod .price.deal { color: var(--bs-primary); font-weight: 700; }
+.prod .prod-sum { text-align: center; font-weight: 800; font-size: .85rem; padding: .15rem .25rem .35rem; background: var(--bs-warning-bg-subtle); line-height: 1.2; }
+.prod .prod-sum small { display: block; font-weight: 600; font-size: .66rem; color: var(--bs-secondary-color); }
+
+.change-box { display: flex; flex-direction: column; gap: .4rem; }
+.change-line { font-weight: 600; font-size: 1rem; }
+.change-line.ok { color: var(--bs-success); }
+.change-line.short { color: var(--bs-danger); }

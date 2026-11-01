@@ -6,7 +6,7 @@ import { Ledger } from '../core/ledger';
 import { photoFromFile } from '../core/image';
 import { Item, ItemDetails } from '../core/models';
 import { peso } from '../core/format';
-import { costFromPack, hasBuyUnit, plural, stockText } from '../core/units';
+import { costFromPack, hasBuyUnit, optionSuffix, optionsOf, plural, priceFor, profitOf, round2, setSize, stockText } from '../core/units';
 import { ItemThumb } from '../shared/item-thumb';
 import { PageHeader } from '../shared/page-header';
 
@@ -39,11 +39,13 @@ import { PageHeader } from '../shared/page-header';
             <div class="avatar"><app-item-thumb [item]="i" /></div>
             <div class="grow">
               <div class="fw-bold">{{ i.name }}</div>
-              <div class="sub">Cost {{ i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }} · Profit {{ i.price - i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}</div>
+              <div class="sub">{{ subLine(i) }}</div>
               @if (packText(i)) { <div class="sub">{{ packText(i) }}</div> }
             </div>
             <div class="text-end">
-              <div class="fw-bold">{{ i.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}{{ i.unit ? ' / ' + i.unit : '' }}</div>
+              @for (o of optionsOf(i); track $index) {
+                <div class="fw-bold">{{ o.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}{{ optionSuffix(i, o) }}</div>
+              }
               <span class="badge" [class]="i.stock <= 5 ? 'text-bg-danger' : 'text-bg-success'">{{ stockText(i) }}</span>
             </div>
           </button>
@@ -71,9 +73,21 @@ import { PageHeader } from '../shared/page-header';
         </div>
         @if (photoError()) { <div class="text-danger small fw-semibold" role="alert">{{ photoError() }}</div> }
         <div class="row g-2">
-          <div class="col-6"><label class="label" for="price">Selling price</label><input id="price" class="form-control" name="price" type="number" inputmode="decimal" min="0" [(ngModel)]="price"></div>
-          <div class="col-6"><label class="label" for="unit">Sold per</label><input id="unit" class="form-control" name="unit" placeholder="piece" maxlength="20" autocomplete="off" [(ngModel)]="unit"></div>
+          <div class="col-4"><label class="label" for="price">Price</label><input id="price" class="form-control" name="price" type="number" inputmode="decimal" min="0" [(ngModel)]="price"></div>
+          <div class="col-3"><label class="label" for="sellQty">For every</label><input id="sellQty" class="form-control" name="sellQty" type="number" inputmode="numeric" min="1" step="1" placeholder="1" [(ngModel)]="sellQty"></div>
+          <div class="col-5"><label class="label" for="unit">Unit name</label><input id="unit" class="form-control" name="unit" placeholder="piece" maxlength="20" autocomplete="off" [(ngModel)]="unit"></div>
         </div>
+        @if (setCount() > 1 && price()) { <div class="small text-secondary">Customers pay {{ peso(price() ?? 0) }} for every {{ setCount() }} {{ sellWord(setCount()) }}.</div> }
+        @for (deal of deals(); track $index) {
+          <div class="d-flex align-items-end gap-2">
+            <div style="width: 30%"><label class="label" [attr.for]="'dealQty' + $index">Pieces</label><input class="form-control" type="number" inputmode="numeric" min="1" step="1" [id]="'dealQty' + $index" [name]="'dealQty' + $index" [ngModel]="deal.qty" (ngModelChange)="setDeal($index, 'qty', $event)"></div>
+            <div class="flex-grow-1"><label class="label" [attr.for]="'dealPrice' + $index">Price for them</label><input class="form-control" type="number" inputmode="decimal" min="0" [id]="'dealPrice' + $index" [name]="'dealPrice' + $index" [ngModel]="deal.price" (ngModelChange)="setDeal($index, 'price', $event)"></div>
+            <button type="button" class="icon-btn sm mb-1" (click)="removeDeal($index)" aria-label="Remove this price"><i class="bi bi-x-lg"></i></button>
+          </div>
+          @if (dealHint(deal); as hint) { <div class="small fw-semibold" [class.text-success]="!hint.bad" [class.text-danger]="hint.bad">{{ hint.text }}</div> }
+        }
+        <button type="button" class="btn btn-sm btn-outline-primary align-self-start" [disabled]="deals().length >= 3" (click)="addDeal()"><i class="bi bi-plus-lg"></i> Add a bundle price (like 3 pieces for ₱5)</button>
+        @if (examples().length) { <div class="small text-secondary"><b>How it will be priced:</b> {{ examples().join(' · ') }}. The price is worked out from the number of pieces, using the cheapest mix.</div> }
         <label class="form-check d-flex align-items-center gap-2 mb-0 fw-semibold">
           <input class="form-check-input mt-0" type="checkbox" name="buyOn" [(ngModel)]="buyOn">
           <span>I buy it in bigger packs (box, bottle, gallon...)</span>
@@ -136,6 +150,10 @@ export class Items {
   protected stock = signal<number | null>(null);
   /** What the shop sells it by: stick, cup, sachet... */
   protected unit = signal('');
+  /** The price covers this many pieces at a time (5 pesos for every 3 pieces). Empty or 1 means one at a time. */
+  protected sellQty = signal<number | null>(null);
+  /** Other prices for the same item: 1 piece for 2 pesos as the regular price, and also 3 for 5 pesos. */
+  protected readonly deals = signal<{ qty: number | null; price: number | null }[]>([]);
   /** Items bought in bigger packs: the pack's name, how many selling units are inside, and what one pack costs. */
   protected buyOn = signal(false);
   protected buyUnit = signal('');
@@ -145,6 +163,23 @@ export class Items {
   protected readonly confirmDelete = signal(false);
 
   protected readonly stockText = stockText;
+  protected readonly optionsOf = optionsOf;
+  protected readonly optionSuffix = optionSuffix;
+  protected readonly setSize = setSize;
+  protected readonly peso = peso;
+  /** Worked examples of the prices the customer will be charged, so the owner can check the bundle price before saving. */
+  protected readonly examples = computed(() => {
+    const price = this.price();
+    const step = this.setCount();
+    const deals = this.deals()
+      .filter((d) => d.qty && d.qty >= 1 && d.price && d.price > 0 && Math.round(d.qty) !== step)
+      .map((d) => ({ qty: Math.round(d.qty as number), price: d.price as number }));
+    if (!price || !deals.length) return [];
+    const item = { price, sellQty: step > 1 ? step : undefined, deals };
+    return [1, 2, 3, 4, 5, 6].map((k) => k * step).map((pieces) => `${pieces} ${plural(this.sellName(), pieces)} ${peso(priceFor(item, pieces).total)}`);
+  });
+  /** Pieces in one sale as typed in the editor (1 when empty). */
+  protected readonly setCount = computed(() => Math.max(1, Math.round(this.sellQty() ?? 1)));
   protected readonly sellName = computed(() => this.unit().trim() || 'piece');
   protected readonly buyName = computed(() => this.buyUnit().trim() || 'pack');
   /** How many selling units are in one pack, or 0 when it is not filled in properly. */
@@ -161,12 +196,17 @@ export class Items {
   protected readonly costHint = computed(() => {
     const cost = this.derivedCost();
     if (cost === null) return '';
-    const base = `Each ${plural(this.sellName(), 1)} costs you ${peso(cost)}`;
+    const per = this.setCount();
+    const base = per > 1
+      ? `Each ${plural(this.sellName(), 1)} costs you ${peso(cost)}, so ${per} cost ${peso(round2(cost * per))}`
+      : `Each ${plural(this.sellName(), 1)} costs you ${peso(cost)}`;
     const price = this.price();
     if (!price) return `${base}.`;
-    return price >= cost ? `${base}, so you earn ${peso(price - cost)} on each.` : `${base}, which is more than you sell it for.`;
+    const earn = round2(price - cost * per);
+    if (earn < 0) return `${base}, which is more than you sell them for.`;
+    return per > 1 ? `${base}. You earn ${peso(earn)} each time you sell ${per}.` : `${base}, so you earn ${peso(earn)} on each.`;
   });
-  protected readonly costWarning = computed(() => this.derivedCost() !== null && (this.price() ?? 0) > 0 && (this.price() ?? 0) < (this.derivedCost() ?? 0));
+  protected readonly costWarning = computed(() => this.derivedCost() !== null && (this.price() ?? 0) > 0 && (this.price() ?? 0) < (this.derivedCost() ?? 0) * this.setCount());
 
   /** Quick restock buttons: whole packs when the item is bought in packs, otherwise plain amounts. */
   protected readonly quick = computed(() =>
@@ -178,12 +218,12 @@ export class Items {
   protected readonly addedStock = computed(() => Math.max(0, (this.stock() ?? 0) - (this.original()?.stock ?? 0)));
 
   protected openNew(): void {
-    this.fill({ emoji: '', photo: '', name: '', price: null, cost: null, stock: null, unit: '', buyUnit: '', perBuyUnit: null, buyCost: null });
+    this.fill({ emoji: '', photo: '', name: '', price: null, cost: null, stock: null, unit: '', sellQty: null, deals: [], buyUnit: '', perBuyUnit: null, buyCost: null });
     this.editing.set('new');
   }
 
   protected openEdit(item: Item): void {
-    this.fill({ ...item, photo: item.photo ?? '', unit: item.unit ?? '', buyUnit: item.buyUnit ?? '', perBuyUnit: item.perBuyUnit ?? null, buyCost: item.buyCost ?? null });
+    this.fill({ ...item, photo: item.photo ?? '', unit: item.unit ?? '', sellQty: item.sellQty ?? null, deals: (item.deals ?? []).map((d) => ({ qty: d.qty, price: d.price })), buyUnit: item.buyUnit ?? '', perBuyUnit: item.perBuyUnit ?? null, buyCost: item.buyCost ?? null });
     this.editing.set(item.id);
   }
 
@@ -192,6 +232,41 @@ export class Items {
     const added = this.ledger.addLowStockToList();
     if (!added) this.ledger.showToast('They are already on your shopping list');
     this.router.navigate(['/shopping']);
+  }
+
+  protected addDeal(): void {
+    this.deals.update((all) => (all.length >= 3 ? all : [...all, { qty: null, price: null }]));
+  }
+
+  protected removeDeal(index: number): void {
+    this.deals.update((all) => all.filter((_, i) => i !== index));
+  }
+
+  protected setDeal(index: number, field: 'qty' | 'price', value: number | null): void {
+    this.deals.update((all) => all.map((d, i) => (i === index ? { ...d, [field]: value === null || value === ('' as unknown) ? null : Number(value) } : d)));
+  }
+
+  /** What one piece costs you now: from the pack price, or what was typed when the item is not bought in packs. */
+  private unitCost(): number | null {
+    return this.derivedCost() ?? (!this.buyOn() && (this.cost() ?? 0) > 0 ? this.cost() : null);
+  }
+
+  /** "You earn ₱3.95 each time" for an extra price, once its pieces and price are filled in and the cost is known. */
+  protected dealHint(deal: { qty: number | null; price: number | null }): { text: string; bad: boolean } | null {
+    const cost = this.unitCost();
+    if (cost === null || !deal.qty || !deal.price) return null;
+    const earn = round2(deal.price - cost * Math.round(deal.qty));
+    return earn < 0 ? { text: 'That is less than these pieces cost you.', bad: true } : { text: `You earn ${peso(earn)} each time you sell ${Math.round(deal.qty)}.`, bad: false };
+  }
+
+  /** The second line of an item in the list: its cost and what a sale earns you. */
+  protected subLine(item: Item): string {
+    const options = optionsOf(item);
+    if (options.length === 1 && setSize(item) === 1) return `Cost ${peso(item.cost)} · Profit ${peso(profitOf(item, options[0]))}`;
+    const profits = options.map((o) => profitOf(item, o));
+    const low = Math.min(...profits);
+    const high = Math.max(...profits);
+    return `Cost ${peso(item.cost)} each · Profit ${low === high ? peso(low) : `${peso(low)} to ${peso(high)}`} per sale`;
   }
 
   protected sellWord(n: number): string {
@@ -227,6 +302,10 @@ export class Items {
 
   protected save(): void {
     const id = this.editing();
+    const filled = this.deals().filter((d) => d.qty || d.price);
+    if (filled.some((d) => !(d.qty && d.qty >= 1 && d.price && d.price > 0))) return this.error.set('Fill in both the pieces and the price for each extra price, or remove that row.');
+    const sizes = filled.map((d) => Math.round(d.qty as number));
+    if (sizes.includes(this.setCount()) || new Set(sizes).size !== sizes.length) return this.error.set('Each price needs a different number of pieces.');
     const details: ItemDetails = {
       emoji: this.emoji() || '🛍️',
       photo: this.photo() || undefined,
@@ -236,6 +315,8 @@ export class Items {
       cost: this.derivedCost() ?? this.cost() ?? 0,
       stock: this.stock() ?? 0,
       unit: this.unit().trim() || undefined,
+      sellQty: this.setCount() > 1 ? this.setCount() : undefined,
+      deals: filled.length ? filled.map((d) => ({ qty: Math.round(d.qty as number), price: d.price as number })) : undefined,
       ...(this.buyOn() ? { buyUnit: this.buyUnit().trim() || undefined, perBuyUnit: this.packSize() || undefined, buyCost: this.buyCost() ?? undefined } : {}),
     };
     const problem = id === 'new' ? this.ledger.addItem(details) : this.ledger.updateItem({ ...details, id: id as string });
@@ -257,9 +338,11 @@ export class Items {
     }
   }
 
-  private fill(v: { emoji: string; photo: string; name: string; price: number | null; cost: number | null; stock: number | null; unit: string; buyUnit: string; perBuyUnit: number | null; buyCost: number | null }): void {
+  private fill(v: { emoji: string; photo: string; name: string; price: number | null; cost: number | null; stock: number | null; unit: string; sellQty: number | null; deals: { qty: number | null; price: number | null }[]; buyUnit: string; perBuyUnit: number | null; buyCost: number | null }): void {
     this.photoError.set('');
     this.unit.set(v.unit);
+    this.sellQty.set(v.sellQty);
+    this.deals.set(v.deals);
     this.buyOn.set(!!v.buyUnit);
     this.buyUnit.set(v.buyUnit);
     this.perBuy.set(v.perBuyUnit);
