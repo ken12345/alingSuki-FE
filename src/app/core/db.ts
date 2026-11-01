@@ -1,3 +1,4 @@
+import { Injectable } from '@angular/core';
 import Dexie, { Table } from 'dexie';
 import { Customer, Entry, Item } from './models';
 
@@ -7,6 +8,7 @@ export interface MetaRow {
 }
 
 /** The device-local database. Every ledger change is written here first, so the app works with no signal. */
+@Injectable({ providedIn: 'root' })
 export class AppDb extends Dexie {
   customers!: Table<Customer, string>;
   items!: Table<Item, string>;

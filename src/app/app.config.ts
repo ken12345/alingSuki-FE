@@ -2,13 +2,18 @@ import { ApplicationConfig, inject, isDevMode, provideAppInitializer, provideBro
 import { provideRouter, withComponentInputBinding } from '@angular/router';
 import { provideServiceWorker } from '@angular/service-worker';
 import { routes } from './app.routes';
+import { Auth } from './core/auth';
 import { Ledger } from './core/ledger';
 
 export const appConfig: ApplicationConfig = {
   providers: [
     provideBrowserGlobalErrorListeners(),
-    // Load the device database before the first route so the login guard knows who is signed in.
-    provideAppInitializer(() => inject(Ledger).init()),
+    // Load the device database and the account before the first route so the guards know who is signed in.
+    provideAppInitializer(() => {
+      const ledger = inject(Ledger);
+      const auth = inject(Auth);
+      return ledger.init().then(() => auth.init());
+    }),
     provideRouter(routes, withComponentInputBinding()),
     provideServiceWorker('ngsw-worker.js', {
       enabled: !isDevMode(),

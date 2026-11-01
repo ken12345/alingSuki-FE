@@ -1,10 +1,11 @@
 import { Routes } from '@angular/router';
-import { authGuard } from './core/auth.guard';
+import { authGuard, guestGuard } from './core/auth.guard';
 import { Shell } from './layout/shell';
 
 export const routes: Routes = [
-  { path: 'login', loadComponent: () => import('./pages/login').then((m) => m.Login) },
-  { path: 'register', loadComponent: () => import('./pages/register').then((m) => m.Register) },
+  { path: 'login', canActivate: [guestGuard], loadComponent: () => import('./pages/login').then((m) => m.Login) },
+  { path: 'register', canActivate: [guestGuard], loadComponent: () => import('./pages/register').then((m) => m.Register) },
+  { path: 'set-pin', canActivate: [authGuard], loadComponent: () => import('./pages/set-pin').then((m) => m.SetPin) },
   { path: 'sale', canActivate: [authGuard], loadComponent: () => import('./pages/sale').then((m) => m.Sale) },
   {
     path: 'customers/:id/payment',

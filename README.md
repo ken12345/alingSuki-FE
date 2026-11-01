@@ -3,6 +3,14 @@
 Mobile-first PWA for sari-sari stores: credit (utang) ledger, quick sales, items and stock, and a daily summary.
 Angular + Bootstrap. Data is stored on the device (IndexedDB) and the app works offline. Live at https://alingsuki.bitezy.online.
 
+## Accounts, login and PIN
+
+There is no server yet, so an account lives on the phone: the mobile number is the username, and the password and
+optional 4-digit PIN are stored only as salted PBKDF2 hashes. The app opens on the login screen every time it is
+launched. After the first password login the owner is offered a PIN; once set, the PIN pad is the default login and
+"Use mobile number and password" is the fallback. Five wrong PINs switch PIN login off until the password is used, and
+five wrong passwords start a timed lock. A forgotten password can only be fixed by erasing the phone and starting again.
+
 ## Develop
 
 ```bash

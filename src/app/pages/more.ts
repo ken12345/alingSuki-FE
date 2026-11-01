@@ -1,6 +1,7 @@
 import { Component, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
+import { Auth } from '../core/auth';
 import { Ledger } from '../core/ledger';
 import { PageHeader } from '../shared/page-header';
 
@@ -34,6 +35,10 @@ import { PageHeader } from '../shared/page-header';
         <a class="row-card" routerLink="/items"><div class="grow fw-bold">Items and prices<div class="sub fw-normal">Prices, profit and stock</div></div><i class="bi bi-chevron-right"></i></a>
         <div class="row-card"><div class="grow fw-bold">Shop name<div class="sub fw-normal">{{ ledger.shopName() }}</div></div></div>
         <div class="row-card"><div class="grow fw-bold">Language<div class="sub fw-normal">English</div></div></div>
+        <a class="row-card" routerLink="/set-pin"><div class="grow fw-bold">{{ auth.hasPin() ? 'Change PIN' : 'Set a PIN' }}<div class="sub fw-normal">Log in faster with 4 digits</div></div><i class="bi bi-chevron-right"></i></a>
+        @if (auth.hasPin()) {
+          <button type="button" class="row-card text-start" (click)="turnOffPin()"><div class="grow fw-bold">Turn off PIN login</div></button>
+        }
         <label class="row-card">
           <div class="grow fw-bold">Show profit on items</div>
           <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" [(ngModel)]="showProfit" aria-label="Show profit on items"></div>
@@ -48,7 +53,7 @@ import { PageHeader } from '../shared/page-header';
         <button type="button" class="row-card text-start" (click)="confirmErase.set(true)"><div class="grow fw-bold text-danger">Erase all data on this phone<div class="sub fw-normal">Customers, items and records</div></div><i class="bi bi-trash text-danger"></i></button>
       </div>
 
-      <button type="button" class="btn btn-outline-secondary mt-2" (click)="logout()">Log out</button>
+      <button type="button" class="btn btn-outline-secondary mt-2" (click)="logout()"><i class="bi bi-lock"></i> Lock and log out</button>
     </div>
 
     @if (confirmErase()) {
@@ -64,13 +69,19 @@ import { PageHeader } from '../shared/page-header';
 })
 export class More {
   protected readonly ledger = inject(Ledger);
+  protected readonly auth = inject(Auth);
   private readonly router = inject(Router);
   protected showProfit = signal(true);
   protected readonly confirmErase = signal(false);
 
   protected logout(): void {
-    this.ledger.signOut();
+    this.auth.signOut();
     this.router.navigate(['/login']);
+  }
+
+  protected async turnOffPin(): Promise<void> {
+    await this.auth.removePin();
+    this.ledger.showToast('PIN turned off');
   }
 
   protected erase(): void {

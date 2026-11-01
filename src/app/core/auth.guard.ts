@@ -1,8 +1,9 @@
 import { inject } from '@angular/core';
 import { CanActivateFn, Router } from '@angular/router';
-import { Ledger } from './ledger';
+import { Auth } from './auth';
 
-export const authGuard: CanActivateFn = () => {
-  const ledger = inject(Ledger);
-  return ledger.loggedIn() || inject(Router).createUrlTree(['/login']);
-};
+/** Everything except the login and register pages needs an unlocked app. */
+export const authGuard: CanActivateFn = () => inject(Auth).signedIn() || inject(Router).createUrlTree(['/login']);
+
+/** Login and register are for locked apps only; an unlocked one goes straight home. */
+export const guestGuard: CanActivateFn = () => !inject(Auth).signedIn() || inject(Router).createUrlTree(['/']);
