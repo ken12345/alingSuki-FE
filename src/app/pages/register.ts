@@ -3,6 +3,7 @@ import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Auth } from '../core/auth';
 import { normalizeMobile } from '../core/format';
+import { Sync } from '../core/sync';
 
 @Component({
   selector: 'app-register',
@@ -20,7 +21,7 @@ import { normalizeMobile } from '../core/format';
       } @else {
         <div class="text-center">
           <h1 class="h4 fw-bold text-primary mb-1">Create your account</h1>
-          <p class="text-secondary mb-0">Free to start. Your records stay on this phone.</p>
+          <p class="text-secondary mb-0">{{ sync.enabled ? 'Free to start. Your records are saved on this phone and backed up online.' : 'Free to start. Your records stay on this phone.' }}</p>
         </div>
         <form class="card" (ngSubmit)="submit()"><div class="card-body d-flex flex-column gap-3">
           <div><label class="form-label fw-bold" for="shop">Store name</label>
@@ -48,6 +49,7 @@ import { normalizeMobile } from '../core/format';
 })
 export class Register {
   protected readonly auth = inject(Auth);
+  protected readonly sync = inject(Sync);
   private readonly router = inject(Router);
 
   protected shop = signal('');
@@ -68,7 +70,8 @@ export class Register {
     if (!this.consent()) return this.error.set('Please agree to continue.');
 
     this.busy.set(true);
-    const problem = await this.auth.register(this.shop().trim(), this.owner().trim(), mobile, this.password());
+    const create = this.sync.enabled ? this.auth.registerOnline.bind(this.auth) : this.auth.register.bind(this.auth);
+    const problem = await create(this.shop().trim(), this.owner().trim(), mobile, this.password());
     this.busy.set(false);
     if (problem) return this.error.set(problem);
     // Right after registering, offer a PIN for faster logins.

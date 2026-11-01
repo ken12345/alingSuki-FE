@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import Dexie, { Table } from 'dexie';
-import { Customer, Entry, Item } from './models';
+import { Customer, Entry, Item, OutboxRow } from './models';
 
 export interface MetaRow {
   key: string;
@@ -14,6 +14,8 @@ export class AppDb extends Dexie {
   items!: Table<Item, string>;
   entries!: Table<Entry, string>;
   meta!: Table<MetaRow, string>;
+  /** Changes not yet sent to the server (only used once the phone is linked to an online account). */
+  outbox!: Table<OutboxRow, number>;
 
   constructor() {
     super('aling-suki');
@@ -22,6 +24,9 @@ export class AppDb extends Dexie {
       items: 'id',
       entries: 'id, customerId, date',
       meta: 'key',
+    });
+    this.version(2).stores({
+      outbox: '++seq, [kind+id]',
     });
   }
 }
