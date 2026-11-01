@@ -1,4 +1,4 @@
-import { Injectable, computed, signal } from '@angular/core';
+import { Injectable, computed, inject, signal } from '@angular/core';
 import { AppDb } from './db';
 import { DAY, HOUR, daysAgo, startOfDay } from './format';
 import { Backup, Customer, Entry, Item, Line, Method } from './models';
@@ -72,11 +72,10 @@ function seedEntries(items: Item[]): Entry[] {
 
 @Injectable({ providedIn: 'root' })
 export class Ledger {
-  private readonly db = new AppDb();
+  private readonly db = inject(AppDb);
 
-  readonly shopName = signal("Aling Nena's Store");
-  readonly ownerName = signal('Aling Nena');
-  readonly loggedIn = signal(false);
+  readonly shopName = signal('My store');
+  readonly ownerName = signal('there');
   readonly online = signal(typeof navigator === 'undefined' ? true : navigator.onLine);
   readonly toast = signal<string | null>(null);
   /** False when the browser refused local storage (private mode, no space); data then lives only until the tab closes. */
@@ -116,54 +115,41 @@ export class Ledger {
     }
   }
 
-  /** Loads everything from this device. The very first run starts with sample data so the screens are not empty. */
+  /** Loads everything from this device. */
   async init(): Promise<void> {
     try {
       await this.db.open();
-      const [customers, items, entries, profile, seeded] = await Promise.all([
-        this.db.customers.toArray(), this.db.items.toArray(), this.db.entries.toArray(),
-        this.db.meta.get('profile'), this.db.meta.get('seeded'),
+      const [customers, items, entries, profile] = await Promise.all([
+        this.db.customers.toArray(), this.db.items.toArray(), this.db.entries.toArray(), this.db.meta.get('profile'),
       ]);
-      if (!seeded) {
-        this.useSample();
-        this.loggedIn.set(true);
-        await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta], async () => {
-          await this.db.customers.bulkPut(this.customers());
-          await this.db.items.bulkPut(this.items());
-          await this.db.entries.bulkPut(this.entries());
-          await this.db.meta.put({ key: 'seeded', value: true });
-        });
-        await this.saveProfile();
-      } else {
-        this.customers.set(customers);
-        this.items.set(items);
-        this.entries.set(entries);
-        const p = profile?.value as { shopName: string; ownerName: string; loggedIn: boolean } | undefined;
-        if (p) { this.shopName.set(p.shopName); this.ownerName.set(p.ownerName); this.loggedIn.set(p.loggedIn); }
-      }
+      this.customers.set(customers);
+      this.items.set(items);
+      this.entries.set(entries);
+      const p = profile?.value as { shopName: string; ownerName: string } | undefined;
+      if (p) { this.shopName.set(p.shopName); this.ownerName.set(p.ownerName); }
       this.persisted.set((await navigator.storage?.persist?.()) ?? false);
     } catch {
       this.storageOk.set(false);
-      if (!this.customers().length) { this.useSample(); this.loggedIn.set(true); }
     }
   }
 
-  signIn(): void {
-    this.loggedIn.set(true);
-    this.save(() => this.saveProfile());
-  }
-
-  signOut(): void {
-    this.loggedIn.set(false);
-    this.save(() => this.saveProfile());
-  }
-
-  /** A new account starts with an empty ledger. */
-  register(shopName: string, ownerName: string): void {
+  /** The names shown in the app. Records already on this phone are kept. */
+  setProfile(shopName: string, ownerName: string): void {
     this.shopName.set(shopName);
     this.ownerName.set(ownerName);
-    this.loggedIn.set(true);
-    this.save(() => this.replaceAll([], [], []));
+    this.save(() => this.saveProfile());
+  }
+
+  /** Removes everything from this phone, including the account. Used when the password is forgotten. */
+  async wipeDevice(): Promise<void> {
+    this.customers.set([]);
+    this.items.set([]);
+    this.entries.set([]);
+    this.shopName.set('My store');
+    this.ownerName.set('there');
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta], async () => {
+      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.meta.clear()]);
+    });
   }
 
   eraseAll(): void {
@@ -312,6 +298,12 @@ export class Ledger {
     return null;
   }
 
+  /** Past sales keep the item's name in their own lines, so removing an item never changes the records. */
+  removeItem(id: string): void {
+    this.items.update((all) => all.filter((i) => i.id !== id));
+    this.save(() => this.db.items.delete(id));
+  }
+
   showToast(message: string): void {
     this.toast.set(message);
     setTimeout(() => this.toast.set(null), 2600);
@@ -342,7 +334,7 @@ export class Ledger {
   private saveProfile(): Promise<unknown> {
     return this.db.meta.put({
       key: 'profile',
-      value: { shopName: this.shopName(), ownerName: this.ownerName(), loggedIn: this.loggedIn() },
+      value: { shopName: this.shopName(), ownerName: this.ownerName() },
     });
   }
 
@@ -355,7 +347,6 @@ export class Ledger {
       await this.db.customers.bulkPut(customers);
       await this.db.items.bulkPut(items);
       await this.db.entries.bulkPut(entries);
-      await this.db.meta.put({ key: 'seeded', value: true });
     });
     await this.saveProfile();
   }

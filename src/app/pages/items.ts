@@ -55,8 +55,20 @@ import { PageHeader } from '../shared/page-header';
         </div>
         @if (error()) { <div class="text-danger small fw-semibold">{{ error() }}</div> }
         <button class="btn btn-primary" type="submit">{{ isNew() ? 'Save item' : 'Save changes' }}</button>
+        @if (!isNew()) {
+          <button class="btn btn-outline-danger" type="button" (click)="confirmDelete.set(true)"><i class="bi bi-trash"></i> Delete this item</button>
+        }
         <button class="btn btn-link text-secondary" type="button" (click)="close()">Cancel</button>
       </form>
+      @if (confirmDelete()) {
+        <div class="sheet-dim" style="z-index: 22" (click)="confirmDelete.set(false)"></div>
+        <div class="sheet d-flex flex-column gap-2" style="z-index: 23">
+          <h2 class="h5 fw-bold mb-0">Delete {{ original()?.name }}?</h2>
+          <p class="small text-secondary mb-1">It disappears from the sale screen and the item list. Past sales stay in your records exactly as they were.</p>
+          <button type="button" class="btn btn-danger" (click)="remove()">Yes, delete it</button>
+          <button type="button" class="btn btn-link text-secondary" (click)="confirmDelete.set(false)">Keep it</button>
+        </div>
+      }
     }
   `,
 })
@@ -75,6 +87,7 @@ export class Items {
   protected cost = signal<number | null>(null);
   protected stock = signal<number | null>(null);
   protected readonly error = signal('');
+  protected readonly confirmDelete = signal(false);
 
   protected readonly addedStock = computed(() => Math.max(0, (this.stock() ?? 0) - (this.original()?.stock ?? 0)));
 
@@ -94,7 +107,16 @@ export class Items {
 
   protected close(): void {
     this.editing.set(null);
+    this.confirmDelete.set(false);
     this.error.set('');
+  }
+
+  protected remove(): void {
+    const item = this.original();
+    if (!item) return;
+    this.ledger.removeItem(item.id);
+    this.ledger.showToast(`${item.name} deleted`);
+    this.close();
   }
 
   protected save(): void {

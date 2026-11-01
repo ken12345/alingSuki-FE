@@ -16,16 +16,21 @@ import { PageHeader } from '../shared/page-header';
         <input class="form-control" type="search" placeholder="Search items..." [(ngModel)]="query" aria-label="Search items">
         <div class="prod-grid">
           @for (item of shown(); track item.id) {
-            <button type="button" class="prod" [class.out]="item.stock === 0" [disabled]="item.stock === 0" (click)="add(item)" (contextmenu)="remove(item); $event.preventDefault()">
-              @if (cart()[item.id]) { <span class="qty">{{ cart()[item.id] }}</span> }
-              <span class="emoji">{{ item.emoji }}</span>{{ item.name }}
-              <span class="price">{{ item.stock === 0 ? 'Out of stock' : (item.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2') }}</span>
-            </button>
+            <div class="prod" [class.on]="cart()[item.id]" [class.out]="item.stock === 0">
+              <button type="button" class="prod-add" [disabled]="item.stock === 0" (click)="add(item)">
+                <span class="emoji">{{ item.emoji }}</span>{{ item.name }}
+                <span class="price">{{ item.stock === 0 ? 'Out of stock' : (item.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2') }}</span>
+              </button>
+              @if (cart()[item.id]; as qty) {
+                <div class="stepper">
+                  <button type="button" (click)="remove(item)" [attr.aria-label]="'One less ' + item.name"><i class="bi bi-dash-lg"></i></button>
+                  <span aria-live="polite">{{ qty }}</span>
+                  <button type="button" [disabled]="qty >= item.stock" (click)="add(item)" [attr.aria-label]="'One more ' + item.name"><i class="bi bi-plus-lg"></i></button>
+                </div>
+              }
+            </div>
           }
         </div>
-        @if (count() > 0) {
-          <button type="button" class="btn btn-link text-secondary p-0 align-self-start" (click)="undo()"><i class="bi bi-arrow-counterclockwise"></i> Undo last tap</button>
-        }
       </div>
 
       <div class="bar-bottom">
@@ -56,7 +61,6 @@ export class Sale {
   protected readonly method = signal<Method>('cash');
   protected customerId = signal('');
   protected readonly error = signal('');
-  private readonly taps: string[] = [];
 
   protected readonly shown = computed(() => {
     const q = this.query().trim().toLowerCase();
@@ -70,19 +74,18 @@ export class Sale {
   protected add(item: Item): void {
     if ((this.cart()[item.id] ?? 0) >= item.stock) return this.error.set(`Only ${item.stock} ${item.name} left.`);
     this.error.set('');
-    this.taps.push(item.id);
     this.cart.update((c) => ({ ...c, [item.id]: (c[item.id] ?? 0) + 1 }));
   }
 
+  /** One less of this item. At zero it leaves the order. */
   protected remove(item: Item): void {
-    if (!this.cart()[item.id]) return;
-    this.taps.splice(this.taps.lastIndexOf(item.id), 1);
-    this.cart.update((c) => ({ ...c, [item.id]: c[item.id] - 1 }));
-  }
-
-  protected undo(): void {
-    const last = this.taps.pop();
-    if (last) this.cart.update((c) => ({ ...c, [last]: c[last] - 1 }));
+    const qty = this.cart()[item.id] ?? 0;
+    if (!qty) return;
+    this.error.set('');
+    this.cart.update((c) => {
+      const { [item.id]: _, ...rest } = c;
+      return qty > 1 ? { ...rest, [item.id]: qty - 1 } : rest;
+    });
   }
 
   protected confirm(): void {

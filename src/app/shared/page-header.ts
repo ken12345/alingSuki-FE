@@ -1,5 +1,6 @@
-import { Component, input } from '@angular/core';
+import { Component, effect, inject, input } from '@angular/core';
 import { RouterLink } from '@angular/router';
+import { BackNav } from '../core/back-nav';
 
 @Component({
   selector: 'app-page-header',
@@ -18,4 +19,13 @@ export class PageHeader {
   readonly title = input.required<string>();
   /** Route to go back to; the back button is hidden when empty. */
   readonly back = input<string | any[]>('');
+
+  constructor() {
+    const backNav = inject(BackNav);
+    // The same target powers the back button and the swipe-from-the-left-edge gesture.
+    effect((onCleanup) => {
+      const target = this.back();
+      if (target && target.length) onCleanup(backNav.register(target));
+    });
+  }
 }
