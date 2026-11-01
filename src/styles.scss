@@ -140,3 +140,13 @@ app-root { display: block; height: 100%; }
 .empty-state > i { font-size: 2.75rem; color: var(--bs-warning); line-height: 1; }
 .empty-state h2 { font-size: 1.15rem; font-weight: 800; color: var(--bs-body-color); margin: 0; }
 .empty-state p { margin: 0 0 .5rem; max-width: 22em; }
+
+/* shopping list */
+.check { width: 36px; height: 36px; flex: none; border: 0; background: none; padding: 0; font-size: 1.6rem; line-height: 1; color: var(--bs-primary); }
+.qty-step { display: flex; align-items: center; gap: .15rem; flex: none; }
+.qty-step button { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--bs-border-color); background: #fff; color: var(--bs-primary); padding: 0; }
+.qty-step button:disabled { opacity: .35; }
+.qty-step span { min-width: 1.7rem; text-align: center; font-weight: 800; }
+.icon-btn.sm { width: 32px; height: 32px; font-size: .85rem; flex: none; }
+.row-card.done .fw-bold { text-decoration: line-through; color: var(--bs-secondary-color); }
+.flex-none { flex: none; }

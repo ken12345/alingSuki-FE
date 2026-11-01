@@ -1,5 +1,6 @@
 import { CurrencyPipe } from '@angular/common';
 import { Component, computed, inject, signal } from '@angular/core';
+import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Ledger } from '../core/ledger';
 import { photoFromFile } from '../core/image';
@@ -9,14 +10,18 @@ import { PageHeader } from '../shared/page-header';
 
 @Component({
   selector: 'app-items',
-  imports: [CurrencyPipe, FormsModule, PageHeader, ItemThumb],
+  imports: [CurrencyPipe, FormsModule, PageHeader, ItemThumb, RouterLink],
   template: `
     <app-page-header title="Items" back="/more">
+      <a class="icon-btn" routerLink="/shopping" aria-label="Shopping list"><i class="bi bi-cart3"></i></a>
       <button type="button" class="icon-btn primary" (click)="openNew()" aria-label="Add item"><i class="bi bi-plus-lg"></i></button>
     </app-page-header>
     <div class="page-body">
       @if (ledger.lowStock().length) {
-        <div class="alert alert-warning py-2 mb-0 small fw-semibold"><i class="bi bi-exclamation-triangle"></i> {{ ledger.lowStock().length }} {{ ledger.lowStock().length === 1 ? 'item is' : 'items are' }} running low or out. Tap an item to add stock.</div>
+        <div class="alert alert-warning py-2 mb-0 small d-flex align-items-center gap-2">
+          <div class="flex-grow-1 fw-semibold"><i class="bi bi-exclamation-triangle"></i> {{ ledger.lowStock().length }} {{ ledger.lowStock().length === 1 ? 'item is' : 'items are' }} running low or out.</div>
+          <button type="button" class="btn btn-sm btn-warning flex-none" (click)="listLow()"><i class="bi bi-cart3"></i> Add to list</button>
+        </div>
       }
       @if (ledger.items().length === 0) {
         <div class="empty-state">
@@ -95,6 +100,7 @@ import { PageHeader } from '../shared/page-header';
 })
 export class Items {
   protected readonly ledger = inject(Ledger);
+  private readonly router = inject(Router);
   protected readonly quick = [10, 20, 50, 100];
 
   /** null = closed, 'new' = adding, otherwise the id of the item being edited. */
@@ -123,6 +129,13 @@ export class Items {
   protected openEdit(item: Item): void {
     this.fill({ ...item, photo: item.photo ?? '' });
     this.editing.set(item.id);
+  }
+
+  /** Puts everything running low on the shopping list, then opens it. */
+  protected listLow(): void {
+    const added = this.ledger.addLowStockToList();
+    if (!added) this.ledger.showToast('They are already on your shopping list');
+    this.router.navigate(['/shopping']);
   }
 
   protected addStock(n: number): void {

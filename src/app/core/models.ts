@@ -22,13 +22,26 @@ export interface Item {
   updatedAt?: number;
 }
 
+/** One line on the shopping list: something to buy at the market. */
+export interface ListItem {
+  id: string;
+  name: string;
+  /** How many to buy. */
+  qty: number;
+  /** Ticked as bought (it moves to "In the basket"). */
+  done: boolean;
+  /** The item in the shop this line is for. Buying it can then be added to that item's stock. */
+  itemId?: string;
+  updatedAt?: number;
+}
+
 export interface Line {
   name: string;
   qty: number;
   amount: number;
 }
 
-export type RecordKind = 'customer' | 'item' | 'entry';
+export type RecordKind = 'customer' | 'item' | 'entry' | 'listitem';
 
 /** A change waiting to be sent to the server. Written in the same transaction as the change itself. */
 export interface OutboxRow {
@@ -58,6 +71,8 @@ export interface Backup {
   profile: { shopName: string; ownerName: string };
   customers: Customer[];
   items: Item[];
+  /** Older backup files do not have it. */
+  shoppingList?: ListItem[];
   entries: Entry[];
 }
 
