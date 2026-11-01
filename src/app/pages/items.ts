@@ -4,7 +4,9 @@ import { Router, RouterLink } from '@angular/router';
 import { FormsModule } from '@angular/forms';
 import { Ledger } from '../core/ledger';
 import { photoFromFile } from '../core/image';
-import { Item } from '../core/models';
+import { Item, ItemDetails } from '../core/models';
+import { peso } from '../core/format';
+import { costFromPack, hasBuyUnit, plural, stockText } from '../core/units';
 import { ItemThumb } from '../shared/item-thumb';
 import { PageHeader } from '../shared/page-header';
 
@@ -38,10 +40,11 @@ import { PageHeader } from '../shared/page-header';
             <div class="grow">
               <div class="fw-bold">{{ i.name }}</div>
               <div class="sub">Cost {{ i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }} · Profit {{ i.price - i.cost | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}</div>
+              @if (packText(i)) { <div class="sub">{{ packText(i) }}</div> }
             </div>
             <div class="text-end">
-              <div class="fw-bold">{{ i.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}</div>
-              <span class="badge" [class]="i.stock <= 5 ? 'text-bg-danger' : 'text-bg-success'">{{ i.stock === 0 ? 'Out of stock' : i.stock + ' left' }}</span>
+              <div class="fw-bold">{{ i.price | currency: 'PHP' : 'symbol-narrow' : '1.0-2' }}{{ i.unit ? ' / ' + i.unit : '' }}</div>
+              <span class="badge" [class]="i.stock <= 5 ? 'text-bg-danger' : 'text-bg-success'">{{ stockText(i) }}</span>
             </div>
           </button>
         }
@@ -68,16 +71,32 @@ import { PageHeader } from '../shared/page-header';
         </div>
         @if (photoError()) { <div class="text-danger small fw-semibold" role="alert">{{ photoError() }}</div> }
         <div class="row g-2">
-          <div class="col-6"><label class="label" for="price">Price</label><input id="price" class="form-control" name="price" type="number" inputmode="decimal" min="0" [(ngModel)]="price"></div>
-          <div class="col-6"><label class="label" for="cost">Cost</label><input id="cost" class="form-control" name="cost" type="number" inputmode="decimal" min="0" [(ngModel)]="cost"></div>
+          <div class="col-6"><label class="label" for="price">Selling price</label><input id="price" class="form-control" name="price" type="number" inputmode="decimal" min="0" [(ngModel)]="price"></div>
+          <div class="col-6"><label class="label" for="unit">Sold per</label><input id="unit" class="form-control" name="unit" placeholder="piece" maxlength="20" autocomplete="off" [(ngModel)]="unit"></div>
         </div>
+        <label class="form-check d-flex align-items-center gap-2 mb-0 fw-semibold">
+          <input class="form-check-input mt-0" type="checkbox" name="buyOn" [(ngModel)]="buyOn">
+          <span>I buy it in bigger packs (box, bottle, gallon...)</span>
+        </label>
+        @if (buyOn()) {
+          <div class="card bg-body"><div class="card-body d-flex flex-column gap-2">
+            <div class="row g-2">
+              <div class="col-6"><label class="label" for="buyUnit">Bought by the</label><input id="buyUnit" class="form-control" name="buyUnit" placeholder="pack" maxlength="20" autocomplete="off" [(ngModel)]="buyUnit"></div>
+              <div class="col-6"><label class="label" for="perBuy">{{ sellWord(2) }} in one {{ buyWord() }}</label><input id="perBuy" class="form-control" name="perBuy" type="number" inputmode="numeric" min="1" step="1" [(ngModel)]="perBuy"></div>
+            </div>
+            <div><label class="label" for="buyCost">Price of one {{ buyWord() }}</label><input id="buyCost" class="form-control" name="buyCost" type="number" inputmode="decimal" min="0" [(ngModel)]="buyCost"></div>
+            @if (costHint()) { <div class="small fw-semibold" [class.text-success]="!costWarning()" [class.text-danger]="costWarning()">{{ costHint() }}</div> }
+          </div></div>
+        } @else {
+          <div><label class="label" for="cost">Cost{{ unit().trim() ? ' per ' + unit().trim() : '' }}</label><input id="cost" class="form-control" name="cost" type="number" inputmode="decimal" min="0" [(ngModel)]="cost"></div>
+        }
         <div>
-          <label class="label" for="stock">{{ isNew() ? 'Stock' : 'Stock on the shelf' }}</label>
+          <label class="label" for="stock">{{ isNew() ? 'Stock' : 'Stock on the shelf' }} (in {{ sellWord(2) }})</label>
           <input id="stock" class="form-control" name="stock" type="number" inputmode="numeric" min="0" [(ngModel)]="stock">
           <div class="chips mt-2">
-            @for (n of quick; track n) { <button type="button" class="chip" (click)="addStock(n)">+{{ n }}</button> }
+            @for (chip of quick(); track chip.label) { <button type="button" class="chip" (click)="addStock(chip.amount)">{{ chip.label }}</button> }
           </div>
-          @if (!isNew() && addedStock() > 0) { <div class="small text-success fw-semibold mt-1">Adding {{ addedStock() }} to {{ original()?.stock }}.</div> }
+          @if (!isNew() && addedStock() > 0) { <div class="small text-success fw-semibold mt-1">Adding {{ addedStock() }} {{ sellWord(addedStock()) }} to the {{ original()?.stock }} you have.</div> }
         </div>
         @if (error()) { <div class="text-danger small fw-semibold">{{ error() }}</div> }
         <button class="btn btn-primary" type="submit">{{ isNew() ? 'Save item' : 'Save changes' }}</button>
@@ -101,7 +120,6 @@ import { PageHeader } from '../shared/page-header';
 export class Items {
   protected readonly ledger = inject(Ledger);
   private readonly router = inject(Router);
-  protected readonly quick = [10, 20, 50, 100];
 
   /** null = closed, 'new' = adding, otherwise the id of the item being edited. */
   protected readonly editing = signal<string | null>(null);
@@ -116,18 +134,56 @@ export class Items {
   protected price = signal<number | null>(null);
   protected cost = signal<number | null>(null);
   protected stock = signal<number | null>(null);
+  /** What the shop sells it by: stick, cup, sachet... */
+  protected unit = signal('');
+  /** Items bought in bigger packs: the pack's name, how many selling units are inside, and what one pack costs. */
+  protected buyOn = signal(false);
+  protected buyUnit = signal('');
+  protected perBuy = signal<number | null>(null);
+  protected buyCost = signal<number | null>(null);
   protected readonly error = signal('');
   protected readonly confirmDelete = signal(false);
+
+  protected readonly stockText = stockText;
+  protected readonly sellName = computed(() => this.unit().trim() || 'piece');
+  protected readonly buyName = computed(() => this.buyUnit().trim() || 'pack');
+  /** How many selling units are in one pack, or 0 when it is not filled in properly. */
+  protected readonly packSize = computed(() => {
+    const n = Math.round(this.perBuy() ?? 0);
+    return this.buyOn() && n >= 1 ? n : 0;
+  });
+  /** What one selling unit costs, from the pack price. */
+  protected readonly derivedCost = computed(() => {
+    const pack = this.buyCost();
+    return this.packSize() > 0 && pack !== null && pack >= 0 ? costFromPack(pack, this.packSize()) : null;
+  });
+  /** "Each stick costs you ₱8, so you earn ₱2 on each." Shown as soon as the pack price and pack size are filled in. */
+  protected readonly costHint = computed(() => {
+    const cost = this.derivedCost();
+    if (cost === null) return '';
+    const base = `Each ${plural(this.sellName(), 1)} costs you ${peso(cost)}`;
+    const price = this.price();
+    if (!price) return `${base}.`;
+    return price >= cost ? `${base}, so you earn ${peso(price - cost)} on each.` : `${base}, which is more than you sell it for.`;
+  });
+  protected readonly costWarning = computed(() => this.derivedCost() !== null && (this.price() ?? 0) > 0 && (this.price() ?? 0) < (this.derivedCost() ?? 0));
+
+  /** Quick restock buttons: whole packs when the item is bought in packs, otherwise plain amounts. */
+  protected readonly quick = computed(() =>
+    this.packSize() > 0
+      ? [1, 5, 10].map((n) => ({ label: `+${n} ${plural(this.buyName(), n)}`, amount: n * this.packSize() }))
+      : [10, 20, 50, 100].map((n) => ({ label: `+${n}`, amount: n })),
+  );
 
   protected readonly addedStock = computed(() => Math.max(0, (this.stock() ?? 0) - (this.original()?.stock ?? 0)));
 
   protected openNew(): void {
-    this.fill({ emoji: '', photo: '', name: '', price: null, cost: null, stock: null });
+    this.fill({ emoji: '', photo: '', name: '', price: null, cost: null, stock: null, unit: '', buyUnit: '', perBuyUnit: null, buyCost: null });
     this.editing.set('new');
   }
 
   protected openEdit(item: Item): void {
-    this.fill({ ...item, photo: item.photo ?? '' });
+    this.fill({ ...item, photo: item.photo ?? '', unit: item.unit ?? '', buyUnit: item.buyUnit ?? '', perBuyUnit: item.perBuyUnit ?? null, buyCost: item.buyCost ?? null });
     this.editing.set(item.id);
   }
 
@@ -136,6 +192,19 @@ export class Items {
     const added = this.ledger.addLowStockToList();
     if (!added) this.ledger.showToast('They are already on your shopping list');
     this.router.navigate(['/shopping']);
+  }
+
+  protected sellWord(n: number): string {
+    return plural(this.sellName(), n);
+  }
+
+  protected buyWord(): string {
+    return this.buyName();
+  }
+
+  /** "1 pack = 20 sticks" for items bought in packs. */
+  protected packText(item: Item): string {
+    return hasBuyUnit(item) ? `1 ${item.buyUnit} = ${item.perBuyUnit} ${plural(item.unit || 'piece', item.perBuyUnit as number)}` : '';
   }
 
   protected addStock(n: number): void {
@@ -158,12 +227,18 @@ export class Items {
 
   protected save(): void {
     const id = this.editing();
-    const problem =
-      id === 'new'
-        ? this.ledger.addItem(this.emoji(), this.name(), this.price() ?? 0, this.cost() ?? 0, this.stock() ?? 0, this.photo() || undefined)
-        : this.ledger.updateItem({
-            id: id!, emoji: this.emoji() || '🛍️', photo: this.photo() || undefined, name: this.name(), price: this.price() ?? 0, cost: this.cost() ?? 0, stock: this.stock() ?? 0,
-          });
+    const details: ItemDetails = {
+      emoji: this.emoji() || '🛍️',
+      photo: this.photo() || undefined,
+      name: this.name(),
+      price: this.price() ?? 0,
+      // With a pack price the cost of one unit is worked out for you; otherwise it is what you typed.
+      cost: this.derivedCost() ?? this.cost() ?? 0,
+      stock: this.stock() ?? 0,
+      unit: this.unit().trim() || undefined,
+      ...(this.buyOn() ? { buyUnit: this.buyUnit().trim() || undefined, perBuyUnit: this.packSize() || undefined, buyCost: this.buyCost() ?? undefined } : {}),
+    };
+    const problem = id === 'new' ? this.ledger.addItem(details) : this.ledger.updateItem({ ...details, id: id as string });
     if (problem) return this.error.set(problem);
     this.ledger.showToast(id === 'new' ? `${this.name().trim()} added` : 'Item updated');
     this.close();
@@ -182,8 +257,13 @@ export class Items {
     }
   }
 
-  private fill(v: { emoji: string; photo: string; name: string; price: number | null; cost: number | null; stock: number | null }): void {
+  private fill(v: { emoji: string; photo: string; name: string; price: number | null; cost: number | null; stock: number | null; unit: string; buyUnit: string; perBuyUnit: number | null; buyCost: number | null }): void {
     this.photoError.set('');
+    this.unit.set(v.unit);
+    this.buyOn.set(!!v.buyUnit);
+    this.buyUnit.set(v.buyUnit);
+    this.perBuy.set(v.perBuyUnit);
+    this.buyCost.set(v.buyCost);
     this.photo.set(v.photo);
     this.emoji.set(v.emoji);
     this.name.set(v.name);
