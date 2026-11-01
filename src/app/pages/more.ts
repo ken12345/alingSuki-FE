@@ -1,8 +1,9 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, computed, inject, signal } from '@angular/core';
 import { FormsModule } from '@angular/forms';
 import { Router, RouterLink } from '@angular/router';
 import { Auth } from '../core/auth';
 import { Ledger } from '../core/ledger';
+import { Sync } from '../core/sync';
 import { PageHeader } from '../shared/page-header';
 
 @Component({
@@ -19,15 +20,40 @@ import { PageHeader } from '../shared/page-header';
       }
 
       <div class="card"><div class="card-body">
-        <b>Backup</b>
-        <div class="small text-secondary my-2">
-          Your records are saved on this phone. {{ ledger.persisted() ? 'The browser has promised not to clear them.' : 'The browser may clear them if the phone runs low on space, so keep a backup file.' }}
-          Online backup is coming later.
+        <div class="d-flex justify-content-between align-items-center">
+          <b>Backup</b>
+          @if (sync.linked()) { <span class="badge" [class]="badgeClass()">{{ label() }}</span> }
         </div>
+
+        @if (sync.linked()) {
+          <div class="small text-secondary my-2">{{ detail() }}</div>
+          @if (sync.state() === 'needs-login') {
+            <input class="form-control mb-2" type="password" autocomplete="current-password" placeholder="Your password" [(ngModel)]="password" aria-label="Password">
+            <button type="button" class="btn btn-primary w-100 mb-2" [disabled]="busy()" (click)="relogin()">Log in again</button>
+          } @else {
+            <button type="button" class="btn btn-outline-primary w-100 mb-2" [disabled]="sync.state() === 'syncing'" (click)="sync.syncNow()"><i class="bi bi-arrow-repeat"></i> Sync now</button>
+          }
+        } @else if (sync.enabled) {
+          <div class="small text-secondary my-2">
+            Your records are only on this phone. Back them up online so they survive a lost phone, and so you can use the same account on another phone.
+            It needs the internet once; after that the app still works offline.
+          </div>
+          <input class="form-control mb-2" type="password" autocomplete="current-password" placeholder="Your password" [(ngModel)]="password" aria-label="Password">
+          <button type="button" class="btn btn-primary w-100 mb-2" [disabled]="busy()" (click)="backUpOnline()">{{ busy() ? 'Backing up...' : 'Back up online' }}</button>
+        } @else {
+          <div class="small text-secondary my-2">
+            Your records are saved on this phone. {{ ledger.persisted() ? 'The browser has promised not to clear them.' : 'The browser may clear them if the phone runs low on space, so keep a backup file.' }}
+            Online backup is coming later.
+          </div>
+        }
+        @if (message()) { <div class="small fw-semibold mb-2" [class.text-danger]="isError()" [class.text-success]="!isError()" role="status">{{ message() }}</div> }
+
         <div class="d-flex flex-column gap-2">
-          <button type="button" class="btn btn-outline-primary" (click)="download()"><i class="bi bi-download"></i> Save backup file</button>
-          <label class="btn btn-outline-secondary mb-0"><i class="bi bi-upload"></i> Restore from backup file
-            <input type="file" accept=".json,application/json" class="d-none" (change)="pick($event)"></label>
+          <button type="button" class="btn btn-outline-secondary" (click)="download()"><i class="bi bi-download"></i> Save backup file</button>
+          @if (!sync.linked()) {
+            <label class="btn btn-outline-secondary mb-0"><i class="bi bi-upload"></i> Restore from backup file
+              <input type="file" accept=".json,application/json" class="d-none" (change)="pick($event)"></label>
+          }
         </div>
       </div></div>
 
@@ -47,10 +73,11 @@ import { PageHeader } from '../shared/page-header';
           <div class="grow fw-bold">Automatic reminders<div class="sub fw-normal">Coming later</div></div>
           <div class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" role="switch" disabled aria-label="Automatic reminders"></div>
         </label>
-        @if (ledger.customers().length === 0 && ledger.entries().length === 0) {
-          <button type="button" class="row-card text-start" (click)="ledger.loadSample()"><div class="grow fw-bold">Load sample data<div class="sub fw-normal">Fill the app with an example store</div></div><i class="bi bi-magic"></i></button>
+        @if (sync.linked()) {
+          <button type="button" class="row-card text-start" (click)="leaving.set(true)"><div class="grow fw-bold text-danger">Remove this account from this phone<div class="sub fw-normal">Your records stay safe online</div></div><i class="bi bi-box-arrow-right text-danger"></i></button>
+        } @else {
+          <button type="button" class="row-card text-start" (click)="confirmErase.set(true)"><div class="grow fw-bold text-danger">Erase all data on this phone<div class="sub fw-normal">Customers, items and records</div></div><i class="bi bi-trash text-danger"></i></button>
         }
-        <button type="button" class="row-card text-start" (click)="confirmErase.set(true)"><div class="grow fw-bold text-danger">Erase all data on this phone<div class="sub fw-normal">Customers, items and records</div></div><i class="bi bi-trash text-danger"></i></button>
       </div>
 
       <button type="button" class="btn btn-outline-secondary mt-2" (click)="logout()"><i class="bi bi-lock"></i> Lock and log out</button>
@@ -65,14 +92,70 @@ import { PageHeader } from '../shared/page-header';
         <button type="button" class="btn btn-link text-secondary" (click)="confirmErase.set(false)">Cancel</button>
       </div>
     }
+
+    @if (leaving()) {
+      <div class="sheet-dim" (click)="leaving.set(false)"></div>
+      <div class="sheet d-flex flex-column gap-2">
+        <h2 class="h5 fw-bold mb-0">Remove this account from this phone?</h2>
+        <p class="small text-secondary mb-1">
+          Your customers, items and records stay safe online. You can log in again on this or another phone with your mobile number and password.
+          There is no password reset yet, so make sure you remember it.
+        </p>
+        @if (leaveError()) { <div class="text-danger small fw-semibold" role="alert">{{ leaveError() }}</div> }
+        <button type="button" class="btn btn-danger" [disabled]="busy()" (click)="leave()">Yes, remove it from this phone</button>
+        <button type="button" class="btn btn-link text-secondary" (click)="leaving.set(false)">Cancel</button>
+      </div>
+    }
   `,
 })
 export class More {
   protected readonly ledger = inject(Ledger);
   protected readonly auth = inject(Auth);
+  protected readonly sync = inject(Sync);
   private readonly router = inject(Router);
+
   protected showProfit = signal(true);
   protected readonly confirmErase = signal(false);
+  protected readonly leaving = signal(false);
+  protected readonly leaveError = signal('');
+  protected readonly busy = signal(false);
+  protected password = signal('');
+  protected readonly message = signal('');
+  protected readonly isError = signal(false);
+
+  protected readonly label = computed(() => {
+    switch (this.sync.state()) {
+      case 'syncing': return 'Syncing...';
+      case 'offline': return 'Offline';
+      case 'error': return 'Problem';
+      case 'needs-login': return 'Log in again';
+      default: return this.sync.pending() > 0 ? 'Waiting to sync' : 'Backed up';
+    }
+  });
+
+  protected readonly badgeClass = computed(() => {
+    switch (this.sync.state()) {
+      case 'syncing': return 'text-bg-secondary';
+      case 'offline': return 'text-bg-warning';
+      case 'error': case 'needs-login': return 'text-bg-danger';
+      default: return this.sync.pending() > 0 ? 'text-bg-warning' : 'text-bg-success';
+    }
+  });
+
+  protected readonly detail = computed(() => {
+    const waiting = this.sync.pending();
+    const waitingText = waiting ? `${waiting} ${waiting === 1 ? 'change is' : 'changes are'} waiting to be sent. ` : '';
+    switch (this.sync.state()) {
+      case 'offline': return `${waitingText}No connection. Everything is saved on this phone and will upload when you are back online.`;
+      case 'error': return `${waitingText}${this.sync.lastError() || 'Something went wrong. It will try again.'}`;
+      case 'needs-login': return 'Your online login expired. Enter your password to keep backing up. Nothing on this phone is lost.';
+      case 'syncing': return 'Sending and receiving changes...';
+      default: {
+        const at = this.sync.lastSyncAt();
+        return `${waitingText}${at ? 'Last synced ' + since(at) + '.' : 'Not synced yet.'} ${this.sync.lastError()}`.trim();
+      }
+    }
+  });
 
   protected logout(): void {
     this.auth.signOut();
@@ -88,6 +171,34 @@ export class More {
     this.ledger.eraseAll();
     this.confirmErase.set(false);
     this.ledger.showToast('All data erased');
+  }
+
+  protected async backUpOnline(): Promise<void> {
+    if (!this.password()) return this.say('Enter your password.', true);
+    this.busy.set(true);
+    const problem = await this.auth.linkOnline(this.password());
+    this.busy.set(false);
+    this.password.set('');
+    this.say(problem ?? 'Backed up online.', !!problem);
+  }
+
+  protected async relogin(): Promise<void> {
+    if (!this.password()) return this.say('Enter your password.', true);
+    this.busy.set(true);
+    const problem = await this.sync.relogin(this.password());
+    this.busy.set(false);
+    this.password.set('');
+    this.say(problem ?? 'Logged in again. Syncing...', !!problem);
+  }
+
+  protected async leave(): Promise<void> {
+    this.busy.set(true);
+    const problem = await this.auth.signOutAndRemoveData();
+    this.busy.set(false);
+    if (problem) return this.leaveError.set(problem);
+    this.leaving.set(false);
+    this.ledger.showToast('Removed from this phone');
+    this.router.navigate(['/login']);
   }
 
   protected download(): void {
@@ -108,4 +219,17 @@ export class More {
     const problem = this.ledger.restore(await file.text());
     this.ledger.showToast(problem ?? 'Backup restored');
   }
+
+  private say(text: string, error: boolean): void {
+    this.message.set(text);
+    this.isError.set(error);
+  }
+}
+
+function since(time: number): string {
+  const minutes = Math.floor((Date.now() - time) / 60_000);
+  if (minutes < 1) return 'just now';
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours} hour${hours === 1 ? '' : 's'} ago` : new Date(time).toLocaleDateString();
 }

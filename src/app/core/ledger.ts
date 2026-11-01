@@ -1,74 +1,9 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { AppDb } from './db';
-import { DAY, HOUR, daysAgo, startOfDay } from './format';
-import { Backup, Customer, Entry, Item, Line, Method } from './models';
+import { daysAgo, startOfDay } from './format';
+import { Backup, Customer, Entry, Item, Line, Method, OutboxRow, RecordKind, RemoteChange } from './models';
 
 const OVERDUE_AFTER_DAYS = 7;
-
-function seedItems(): Item[] {
-  return [
-    { id: 'i1', emoji: '🚬', name: 'Cigarettes', price: 10, cost: 8, stock: 80 },
-    { id: 'i2', emoji: '☕', name: 'Coffee sachet', price: 8, cost: 6, stock: 45 },
-    { id: 'i3', emoji: '🍜', name: 'Lucky Me', price: 16, cost: 12, stock: 3 },
-    { id: 'i4', emoji: '🥚', name: 'Egg', price: 9, cost: 7, stock: 4 },
-    { id: 'i5', emoji: '🍬', name: 'Candy', price: 1, cost: 0.6, stock: 200 },
-    { id: 'i6', emoji: '🧼', name: 'Soap', price: 22, cost: 18, stock: 12 },
-    { id: 'i7', emoji: '🥤', name: 'Softdrink', price: 15, cost: 11, stock: 30 },
-    { id: 'i8', emoji: '🍚', name: 'Rice /kg', price: 58, cost: 52, stock: 25 },
-  ];
-}
-
-function seedCustomers(): Customer[] {
-  return [
-    { id: 'c1', name: 'Mang Rudy', phone: '+639171234567', creditLimit: 2000 },
-    { id: 'c2', name: 'Ate Lita', phone: '+639181112233', creditLimit: 1500 },
-    { id: 'c3', name: 'Jun dela Cruz', phone: '+639201234000', creditLimit: 1000 },
-    { id: 'c4', name: 'Kuya Boy', phone: '+639175550101', creditLimit: 1000 },
-    { id: 'c5', name: 'Aling Maring', phone: '+639189990202', creditLimit: 800 },
-    { id: 'c6', name: 'Ate Joy', phone: '+639221110303', creditLimit: 500 },
-    { id: 'c7', name: 'Kuya Ben', phone: '+639334440404', creditLimit: 500 },
-  ];
-}
-
-function seedEntries(items: Item[]): Entry[] {
-  const now = Date.now();
-  const out: Entry[] = [];
-  let n = 0;
-  const id = () => `e${++n}`;
-
-  // About three sale rows a day for the past week, so the summary has something to show.
-  for (let d = 0; d < 7; d++) {
-    for (let k = 0; k < 3; k++) {
-      const lines: Line[] = [];
-      let amount = 0;
-      let profit = 0;
-      for (let j = 0; j < 4; j++) {
-        const item = items[(d + k * 2 + j * 3) % items.length];
-        const qty = (((d * 7 + k * 3 + j) % 5) + 1) * 4;
-        lines.push({ name: item.name, qty, amount: item.price * qty });
-        amount += item.price * qty;
-        profit += (item.price - item.cost) * qty;
-      }
-      out.push({
-        id: id(), type: 'sale', method: k === 2 ? 'gcash' : 'cash',
-        amount, profit, note: '', date: now - d * DAY - (k + 1) * HOUR, lines,
-      });
-    }
-  }
-
-  const credit = (customerId: string, amount: number, days: number, note: string) =>
-    out.push({ id: id(), customerId, type: 'charge', method: 'credit', amount, profit: Math.round(amount * 0.2), note, date: now - days * DAY, lines: [] });
-  const pay = (customerId: string, amount: number, days: number, method: Method = 'cash') =>
-    out.push({ id: id(), customerId, type: 'payment', method, amount, profit: 0, note: '', date: now - days * DAY, lines: [] });
-
-  credit('c1', 1235, 14, 'Rice, canned goods'); credit('c1', 120, 12, 'Rice 2 kg');
-  pay('c1', 300, 10); credit('c1', 185, 3, 'Cigarettes, coffee');
-  credit('c2', 680, 9, 'Groceries');
-  credit('c3', 420, 0, 'Noodles, eggs');
-  credit('c4', 400, 6, 'Soap, softdrinks'); pay('c4', 250, 2, 'gcash');
-  credit('c5', 200, 4, 'Coffee'); pay('c5', 200, 3);
-  return out;
-}
 
 @Injectable({ providedIn: 'root' })
 export class Ledger {
@@ -82,6 +17,10 @@ export class Ledger {
   readonly storageOk = signal(true);
   /** True when the browser promised not to clear this app's data on its own. */
   readonly persisted = signal(false);
+  /** True once this phone is linked to an online account: every change is then also queued for upload. Set by Sync. */
+  readonly syncLinked = signal(false);
+  /** Goes up by one each time a change is queued, so Sync knows there is something to send. */
+  readonly revision = signal(0);
 
   readonly items = signal<Item[]>([]);
   readonly customers = signal<Customer[]>([]);
@@ -147,18 +86,15 @@ export class Ledger {
     this.entries.set([]);
     this.shopName.set('My store');
     this.ownerName.set('there');
-    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta], async () => {
-      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.meta.clear()]);
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta, this.db.outbox], async () => {
+      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.meta.clear(), this.db.outbox.clear()]);
     });
   }
 
+  // While the phone is backed up online, the server's copy is the truth, so wiping or replacing it from here is not offered.
   eraseAll(): void {
+    if (this.syncLinked()) return;
     this.save(() => this.replaceAll([], [], []));
-  }
-
-  loadSample(): void {
-    this.useSample();
-    this.save(() => this.replaceAll(this.customers(), this.items(), this.entries()));
   }
 
   exportBackup(): Backup {
@@ -171,6 +107,7 @@ export class Ledger {
 
   /** Replaces everything on this device with a backup file. Returns an error message, or null on success. */
   restore(text: string): string | null {
+    if (this.syncLinked()) return 'Restoring from a file is not available while your data is backed up online.';
     let data: Partial<Backup>;
     try { data = JSON.parse(text); } catch { return 'That file is not a valid backup.'; }
     if (data.app !== 'aling-suki' || data.version !== 1 || !Array.isArray(data.customers) || !Array.isArray(data.items) || !Array.isArray(data.entries) || !data.profile) {
@@ -244,12 +181,19 @@ export class Ledger {
       const limitError = this.checkCredit(customerId, amount);
       if (limitError) return limitError;
     }
-    this.record({
+    const now = Date.now();
+    const entry: Entry = {
       id: crypto.randomUUID(), customerId: method === 'credit' ? customerId : undefined,
-      type: method === 'credit' ? 'charge' : 'sale', method, amount, profit, note: '', date: Date.now(), lines,
-    });
-    this.items.update((all) => all.map((i) => (cart[i.id] ? { ...i, stock: Math.max(0, i.stock - cart[i.id]) } : i)));
-    this.save(() => this.db.items.bulkPut(this.items()));
+      type: method === 'credit' ? 'charge' : 'sale', method, amount, profit, note: '', date: now, lines,
+    };
+    const soldItems = this.items().filter((i) => cart[i.id]).map((i) => ({ ...i, stock: Math.max(0, i.stock - cart[i.id]), updatedAt: now }));
+    const byId = new Map(soldItems.map((i) => [i.id, i]));
+    this.entries.update((all) => [...all, entry]);
+    this.items.update((all) => all.map((i) => byId.get(i.id) ?? i));
+    this.commit(
+      (db) => Promise.all([db.entries.add(entry), db.items.bulkPut(soldItems)]),
+      [this.outboxRow('entry', entry), ...soldItems.map((i) => this.outboxRow('item', i))],
+    );
     return null;
   }
 
@@ -274,17 +218,17 @@ export class Ledger {
 
   addCustomer(name: string, phone: string): string | null {
     if (!name.trim()) return 'Enter a name.';
-    const customer: Customer = { id: crypto.randomUUID(), name: name.trim(), phone, creditLimit: 1000 };
+    const customer: Customer = { id: crypto.randomUUID(), name: name.trim(), phone, creditLimit: 1000, updatedAt: Date.now() };
     this.customers.update((all) => [...all, customer]);
-    this.save(() => this.db.customers.put(customer));
+    this.commit((db) => db.customers.put(customer), [this.outboxRow('customer', customer)]);
     return null;
   }
 
   addItem(emoji: string, name: string, price: number, cost: number, stock: number): string | null {
     if (!name.trim() || !(price > 0)) return 'Enter a name and a price.';
-    const item: Item = { id: crypto.randomUUID(), emoji: emoji || '🛍️', name: name.trim(), price, cost: cost || 0, stock: stock || 0 };
+    const item: Item = { id: crypto.randomUUID(), emoji: emoji || '🛍️', name: name.trim(), price, cost: cost || 0, stock: stock || 0, updatedAt: Date.now() };
     this.items.update((all) => [...all, item]);
-    this.save(() => this.db.items.put(item));
+    this.commit((db) => db.items.put(item), [this.outboxRow('item', item)]);
     return null;
   }
 
@@ -292,16 +236,86 @@ export class Ledger {
   updateItem(item: Item): string | null {
     if (!item.name.trim() || !(item.price > 0)) return 'Enter a name and a price.';
     if (item.stock < 0 || item.cost < 0) return 'Cost and stock cannot be negative.';
-    const clean: Item = { ...item, name: item.name.trim() };
+    const clean: Item = { ...item, name: item.name.trim(), updatedAt: Date.now() };
     this.items.update((all) => all.map((i) => (i.id === clean.id ? clean : i)));
-    this.save(() => this.db.items.put(clean));
+    this.commit((db) => db.items.put(clean), [this.outboxRow('item', clean)]);
     return null;
   }
 
   /** Past sales keep the item's name in their own lines, so removing an item never changes the records. */
   removeItem(id: string): void {
+    const item = this.items().find((i) => i.id === id);
+    if (!item) return;
     this.items.update((all) => all.filter((i) => i.id !== id));
-    this.save(() => this.db.items.delete(id));
+    // Other phones are told through a "deleted" record that carries the item's last details.
+    this.commit((db) => db.items.delete(id), [this.outboxRow('item', item, true, Date.now())]);
+  }
+
+  /**
+   * Applies changes that came from the server (made on another phone, or this phone's own earlier pushes coming back).
+   * Entries are history and are only ever added. Customers and items keep whichever edit is newer, so an edit made here
+   * that has not been sent yet is never overwritten by an older one from the server. Nothing here is queued for upload.
+   */
+  async applyRemote(changes: RemoteChange[]): Promise<void> {
+    if (!changes.length) return;
+    const customers = new Map(this.customers().map((c) => [c.id, c]));
+    const items = new Map(this.items().map((i) => [i.id, i]));
+    const entryIds = new Set(this.entries().map((e) => e.id));
+    const newEntries: Entry[] = [];
+    const putCustomers: Customer[] = [], putItems: Item[] = [];
+    const deleteCustomers: string[] = [], deleteItems: string[] = [];
+
+    for (const change of changes) {
+      if (change.kind === 'entry') {
+        if (!entryIds.has(change.id)) { entryIds.add(change.id); newEntries.push(change.data as Entry); }
+        continue;
+      }
+      const table = change.kind === 'customer' ? customers : items;
+      const local = table.get(change.id);
+      if (local && (local.updatedAt ?? 0) > change.updatedAt) continue;
+      if (change.deleted) {
+        table.delete(change.id);
+        (change.kind === 'customer' ? deleteCustomers : deleteItems).push(change.id);
+      } else if (change.kind === 'customer') {
+        const record = { ...(change.data as Customer), updatedAt: change.updatedAt };
+        customers.set(record.id, record);
+        putCustomers.push(record);
+      } else {
+        const record = { ...(change.data as Item), updatedAt: change.updatedAt };
+        items.set(record.id, record);
+        putItems.push(record);
+      }
+    }
+
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries], async () => {
+      await this.db.customers.bulkDelete(deleteCustomers);
+      await this.db.items.bulkDelete(deleteItems);
+      await this.db.customers.bulkPut(putCustomers);
+      await this.db.items.bulkPut(putItems);
+      await this.db.entries.bulkPut(newEntries);
+    });
+    this.customers.set([...customers.values()]);
+    this.items.set([...items.values()]);
+    if (newEntries.length) this.entries.update((all) => [...all, ...newEntries]);
+  }
+
+  /** The first time a phone links to an online account, everything already on it is queued for upload. */
+  async enqueueEverything(): Promise<void> {
+    // Records from before edits were timestamped get the earliest possible time, so a newer copy on the server wins.
+    const customers = this.customers().map((c) => ({ ...c, updatedAt: c.updatedAt ?? 1 }));
+    const items = this.items().map((i) => ({ ...i, updatedAt: i.updatedAt ?? 1 }));
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.outbox], async () => {
+      await this.db.customers.bulkPut(customers);
+      await this.db.items.bulkPut(items);
+      await this.enqueue([
+        ...customers.map((c) => this.outboxRow('customer', c)),
+        ...items.map((i) => this.outboxRow('item', i)),
+        ...this.entries().map((e) => this.outboxRow('entry', e)),
+      ]);
+    });
+    this.customers.set(customers);
+    this.items.set(items);
+    this.revision.update((n) => n + 1);
   }
 
   showToast(message: string): void {
@@ -311,16 +325,39 @@ export class Ledger {
 
   today = () => startOfDay();
 
-  private useSample(): void {
-    const items = seedItems();
-    this.items.set(items);
-    this.customers.set(seedCustomers());
-    this.entries.set(seedEntries(items));
-  }
-
   private record(entry: Entry): void {
     this.entries.update((all) => [...all, entry]);
-    this.save(() => this.db.entries.add(entry));
+    this.commit((db) => db.entries.add(entry), [this.outboxRow('entry', entry)]);
+  }
+
+  /**
+   * Saves a change on this phone and, when the phone is linked to an online account, queues it for upload in the SAME
+   * database transaction, so a change can never be saved without also being queued.
+   */
+  private commit(work: (db: AppDb) => Promise<unknown>, outbox: OutboxRow[]): void {
+    const queued = this.syncLinked() ? outbox : [];
+    this.save(() =>
+      this.db
+        .transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.outbox], async () => {
+          await work(this.db);
+          if (queued.length) await this.enqueue(queued);
+        })
+        .then(() => { if (queued.length) this.revision.update((n) => n + 1); }),
+    );
+  }
+
+  private outboxRow(kind: RecordKind, record: Customer | Item | Entry, deleted = false, stamp?: number): OutboxRow {
+    const { updatedAt, ...data } = record as unknown as Record<string, unknown>;
+    const at = stamp ?? (kind === 'entry' ? (record as Entry).date : (updatedAt as number | undefined) ?? 1);
+    return { kind, id: record.id, updatedAt: at, deleted, data };
+  }
+
+  private async enqueue(rows: OutboxRow[]): Promise<void> {
+    // A newer edit to a customer or item replaces an older one still waiting, so the outbox never grows with every tap.
+    for (const row of rows) {
+      if (row.kind !== 'entry') await this.db.outbox.where('[kind+id]').equals([row.kind, row.id]).delete();
+    }
+    await this.db.outbox.bulkAdd(rows);
   }
 
   /** Runs a database write without blocking the screen; tells the user if the device could not save it. */

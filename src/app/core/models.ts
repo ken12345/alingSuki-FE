@@ -5,6 +5,8 @@ export interface Customer {
   name: string;
   phone: string;
   creditLimit: number;
+  /** When this customer was last edited on a phone (ms). Used to settle edits made on two phones. Missing on old records. */
+  updatedAt?: number;
 }
 
 export interface Item {
@@ -14,12 +16,36 @@ export interface Item {
   price: number;
   cost: number;
   stock: number;
+  /** When this item was last edited on a phone (ms). Missing on old records. */
+  updatedAt?: number;
 }
 
 export interface Line {
   name: string;
   qty: number;
   amount: number;
+}
+
+export type RecordKind = 'customer' | 'item' | 'entry';
+
+/** A change waiting to be sent to the server. Written in the same transaction as the change itself. */
+export interface OutboxRow {
+  seq?: number;
+  kind: RecordKind;
+  id: string;
+  updatedAt: number;
+  deleted: boolean;
+  data: unknown;
+}
+
+/** A change received from the server. */
+export interface RemoteChange {
+  kind: RecordKind;
+  id: string;
+  data: unknown;
+  updatedAt: number;
+  deleted: boolean;
+  seq: number;
 }
 
 /** The backup file: everything on this device, as one JSON document. */

@@ -4,6 +4,7 @@ import { provideServiceWorker } from '@angular/service-worker';
 import { routes } from './app.routes';
 import { Auth } from './core/auth';
 import { Ledger } from './core/ledger';
+import { Sync } from './core/sync';
 
 export const appConfig: ApplicationConfig = {
   providers: [
@@ -12,7 +13,8 @@ export const appConfig: ApplicationConfig = {
     provideAppInitializer(() => {
       const ledger = inject(Ledger);
       const auth = inject(Auth);
-      return ledger.init().then(() => auth.init());
+      const sync = inject(Sync);
+      return ledger.init().then(() => auth.init()).then(() => sync.init());
     }),
     provideRouter(routes, withComponentInputBinding()),
     provideServiceWorker('ngsw-worker.js', {
