@@ -59,6 +59,7 @@ import { PageHeader } from '../shared/page-header';
 
       <div class="d-flex flex-column gap-2">
         <a class="row-card" routerLink="/items"><div class="grow fw-bold">Items and prices<div class="sub fw-normal">Prices, profit and stock</div></div><i class="bi bi-chevron-right"></i></a>
+        <a class="row-card" routerLink="/shopping"><div class="grow fw-bold">Shopping list<div class="sub fw-normal">{{ ledger.shoppingCount() ? ledger.shoppingCount() + ' to buy at the market' : 'Things to buy at the market' }}</div></div><i class="bi bi-chevron-right"></i></a>
         <div class="row-card"><div class="grow fw-bold">Shop name<div class="sub fw-normal">{{ ledger.shopName() }}</div></div></div>
         <div class="row-card"><div class="grow fw-bold">Language<div class="sub fw-normal">English</div></div></div>
         <a class="row-card" routerLink="/set-pin"><div class="grow fw-bold">{{ auth.hasPin() ? 'Change PIN' : 'Set a PIN' }}<div class="sub fw-normal">Log in faster with 4 digits</div></div><i class="bi bi-chevron-right"></i></a>

@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import Dexie, { Table } from 'dexie';
-import { Customer, Entry, Item, OutboxRow } from './models';
+import { Customer, Entry, Item, ListItem, OutboxRow } from './models';
 
 export interface MetaRow {
   key: string;
@@ -13,6 +13,7 @@ export class AppDb extends Dexie {
   customers!: Table<Customer, string>;
   items!: Table<Item, string>;
   entries!: Table<Entry, string>;
+  listItems!: Table<ListItem, string>;
   meta!: Table<MetaRow, string>;
   /** Changes not yet sent to the server (only used once the phone is linked to an online account). */
   outbox!: Table<OutboxRow, number>;
@@ -27,6 +28,9 @@ export class AppDb extends Dexie {
     });
     this.version(2).stores({
       outbox: '++seq, [kind+id]',
+    });
+    this.version(3).stores({
+      listItems: 'id',
     });
   }
 }

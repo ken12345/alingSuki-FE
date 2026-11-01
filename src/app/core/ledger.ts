@@ -1,9 +1,13 @@
 import { Injectable, computed, inject, signal } from '@angular/core';
 import { AppDb } from './db';
 import { daysAgo, startOfDay } from './format';
-import { Backup, Customer, Entry, Item, Line, Method, OutboxRow, RecordKind, RemoteChange } from './models';
+import { Backup, Customer, Entry, Item, Line, ListItem, Method, OutboxRow, RecordKind, RemoteChange } from './models';
 
 const OVERDUE_AFTER_DAYS = 7;
+/** An item with this many left or fewer counts as running low. */
+const LOW_STOCK = 5;
+/** How many of an item the list suggests buying when it is added from the item list. */
+const DEFAULT_BUY_QTY = 10;
 
 @Injectable({ providedIn: 'root' })
 export class Ledger {
@@ -45,7 +49,11 @@ export class Ledger {
       .sort((a, b) => this.overdueDays(b.id) - this.overdueDays(a.id)),
   );
 
-  readonly lowStock = computed(() => this.items().filter((i) => i.stock <= 5));
+  readonly lowStock = computed(() => this.items().filter((i) => i.stock <= LOW_STOCK));
+
+  readonly listItems = signal<ListItem[]>([]);
+  /** How many things are still to be bought. */
+  readonly shoppingCount = computed(() => this.listItems().filter((l) => !l.done).length);
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -58,12 +66,13 @@ export class Ledger {
   async init(): Promise<void> {
     try {
       await this.db.open();
-      const [customers, items, entries, profile] = await Promise.all([
-        this.db.customers.toArray(), this.db.items.toArray(), this.db.entries.toArray(), this.db.meta.get('profile'),
+      const [customers, items, entries, listItems, profile] = await Promise.all([
+        this.db.customers.toArray(), this.db.items.toArray(), this.db.entries.toArray(), this.db.listItems.toArray(), this.db.meta.get('profile'),
       ]);
       this.customers.set(customers);
       this.items.set(items);
       this.entries.set(entries);
+      this.listItems.set(listItems);
       const p = profile?.value as { shopName: string; ownerName: string } | undefined;
       if (p) { this.shopName.set(p.shopName); this.ownerName.set(p.ownerName); }
       this.persisted.set((await navigator.storage?.persist?.()) ?? false);
@@ -84,10 +93,11 @@ export class Ledger {
     this.customers.set([]);
     this.items.set([]);
     this.entries.set([]);
+    this.listItems.set([]);
     this.shopName.set('My store');
     this.ownerName.set('there');
-    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta, this.db.outbox], async () => {
-      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.meta.clear(), this.db.outbox.clear()]);
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.listItems, this.db.meta, this.db.outbox], async () => {
+      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.listItems.clear(), this.db.meta.clear(), this.db.outbox.clear()]);
     });
   }
 
@@ -101,7 +111,7 @@ export class Ledger {
     return {
       app: 'aling-suki', version: 1, exportedAt: Date.now(),
       profile: { shopName: this.shopName(), ownerName: this.ownerName() },
-      customers: this.customers(), items: this.items(), entries: this.entries(),
+      customers: this.customers(), items: this.items(), entries: this.entries(), shoppingList: this.listItems(),
     };
   }
 
@@ -115,7 +125,7 @@ export class Ledger {
     }
     this.shopName.set(data.profile.shopName);
     this.ownerName.set(data.profile.ownerName);
-    this.save(() => this.replaceAll(data.customers!, data.items!, data.entries!));
+    this.save(() => this.replaceAll(data.customers!, data.items!, data.entries!, Array.isArray(data.shoppingList) ? data.shoppingList : []));
     return null;
   }
 
@@ -260,44 +270,47 @@ export class Ledger {
    */
   async applyRemote(changes: RemoteChange[]): Promise<void> {
     if (!changes.length) return;
-    const customers = new Map(this.customers().map((c) => [c.id, c]));
-    const items = new Map(this.items().map((i) => [i.id, i]));
+    // Customers, items and shopping-list lines all follow "newest edit wins"; each has its own table.
+    const tables = {
+      customer: new Map<string, Customer>(this.customers().map((c) => [c.id, c])),
+      item: new Map<string, Item>(this.items().map((i) => [i.id, i])),
+      listitem: new Map<string, ListItem>(this.listItems().map((l) => [l.id, l])),
+    };
+    const puts = { customer: [] as Customer[], item: [] as Item[], listitem: [] as ListItem[] };
+    const deletes = { customer: [] as string[], item: [] as string[], listitem: [] as string[] };
     const entryIds = new Set(this.entries().map((e) => e.id));
     const newEntries: Entry[] = [];
-    const putCustomers: Customer[] = [], putItems: Item[] = [];
-    const deleteCustomers: string[] = [], deleteItems: string[] = [];
 
     for (const change of changes) {
       if (change.kind === 'entry') {
         if (!entryIds.has(change.id)) { entryIds.add(change.id); newEntries.push(change.data as Entry); }
         continue;
       }
-      const table = change.kind === 'customer' ? customers : items;
+      const table = tables[change.kind] as Map<string, { id: string; updatedAt?: number }>;
       const local = table.get(change.id);
       if (local && (local.updatedAt ?? 0) > change.updatedAt) continue;
       if (change.deleted) {
         table.delete(change.id);
-        (change.kind === 'customer' ? deleteCustomers : deleteItems).push(change.id);
-      } else if (change.kind === 'customer') {
-        const record = { ...(change.data as Customer), updatedAt: change.updatedAt };
-        customers.set(record.id, record);
-        putCustomers.push(record);
+        deletes[change.kind].push(change.id);
       } else {
-        const record = { ...(change.data as Item), updatedAt: change.updatedAt };
-        items.set(record.id, record);
-        putItems.push(record);
+        const record = { ...(change.data as { id: string }), updatedAt: change.updatedAt };
+        table.set(record.id, record);
+        (puts[change.kind] as { id: string }[]).push(record);
       }
     }
 
-    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries], async () => {
-      await this.db.customers.bulkDelete(deleteCustomers);
-      await this.db.items.bulkDelete(deleteItems);
-      await this.db.customers.bulkPut(putCustomers);
-      await this.db.items.bulkPut(putItems);
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.listItems], async () => {
+      await this.db.customers.bulkDelete(deletes.customer);
+      await this.db.items.bulkDelete(deletes.item);
+      await this.db.listItems.bulkDelete(deletes.listitem);
+      await this.db.customers.bulkPut(puts.customer);
+      await this.db.items.bulkPut(puts.item);
+      await this.db.listItems.bulkPut(puts.listitem);
       await this.db.entries.bulkPut(newEntries);
     });
-    this.customers.set([...customers.values()]);
-    this.items.set([...items.values()]);
+    this.customers.set([...tables.customer.values()]);
+    this.items.set([...tables.item.values()]);
+    this.listItems.set([...tables.listitem.values()]);
     if (newEntries.length) this.entries.update((all) => [...all, ...newEntries]);
   }
 
@@ -306,18 +319,106 @@ export class Ledger {
     // Records from before edits were timestamped get the earliest possible time, so a newer copy on the server wins.
     const customers = this.customers().map((c) => ({ ...c, updatedAt: c.updatedAt ?? 1 }));
     const items = this.items().map((i) => ({ ...i, updatedAt: i.updatedAt ?? 1 }));
-    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.outbox], async () => {
+    const listItems = this.listItems().map((l) => ({ ...l, updatedAt: l.updatedAt ?? 1 }));
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.listItems, this.db.outbox], async () => {
       await this.db.customers.bulkPut(customers);
       await this.db.items.bulkPut(items);
+      await this.db.listItems.bulkPut(listItems);
       await this.enqueue([
         ...customers.map((c) => this.outboxRow('customer', c)),
         ...items.map((i) => this.outboxRow('item', i)),
+        ...listItems.map((l) => this.outboxRow('listitem', l)),
         ...this.entries().map((e) => this.outboxRow('entry', e)),
       ]);
     });
     this.customers.set(customers);
     this.items.set(items);
+    this.listItems.set(listItems);
     this.revision.update((n) => n + 1);
+  }
+
+  // ---- shopping list ----------------------------------------------------------------------------------------------
+
+  /** Adds something to buy. Pass itemId when it is one of the shop's items, so buying it can be added to its stock. */
+  addToList(name: string, itemId?: string, qty?: number): string | null {
+    const clean = name.trim().slice(0, 80);
+    if (!clean) return 'Type what you need to buy.';
+    const same = itemId
+      ? this.listItems().find((l) => l.itemId === itemId)
+      : this.listItems().find((l) => !l.itemId && l.name.toLowerCase() === clean.toLowerCase());
+    if (same) {
+      if (!same.done) return `${clean} is already on your list.`;
+      this.saveListItem({ ...same, done: false, qty: qty ?? same.qty }); // bought before: it goes back on the list
+      return null;
+    }
+    this.saveListItem({ id: crypto.randomUUID(), name: clean, qty: qty ?? (itemId ? DEFAULT_BUY_QTY : 1), done: false, ...(itemId ? { itemId } : {}) });
+    return null;
+  }
+
+  /** Adds every item that is running low and has no line on the list yet (ticked or not). Returns how many were added. */
+  addLowStockToList(): number {
+    const low = this.items().filter((i) => i.stock <= LOW_STOCK && !this.listItems().some((l) => l.itemId === i.id));
+    for (const item of low) this.addToList(item.name, item.id);
+    return low.length;
+  }
+
+  /** Changes how many to buy by +1 or -1. Reads the current value, so quick repeated taps never lose one. */
+  changeListQty(id: string, by: number): void {
+    const line = this.listItems().find((l) => l.id === id);
+    if (line) this.saveListItem({ ...line, qty: Math.min(9999, Math.max(1, line.qty + by)) });
+  }
+
+  toggleListDone(id: string): void {
+    const line = this.listItems().find((l) => l.id === id);
+    if (line) this.saveListItem({ ...line, done: !line.done });
+  }
+
+  removeListItem(id: string): void {
+    this.removeListItems([id]);
+  }
+
+  /** Empties the basket: removes everything ticked as bought, without touching stock. */
+  clearBought(): void {
+    this.removeListItems(this.listItems().filter((l) => l.done).map((l) => l.id));
+  }
+
+  /**
+   * Done shopping: adds what was bought to each item's stock and clears those lines from the list. Lines that are not
+   * linked to an item (for example "plastic bags") have no stock to change and stay until the basket is cleared.
+   * Returns how many items were restocked.
+   */
+  receiveBought(): number {
+    const bought = this.listItems().filter((l) => l.done && l.itemId);
+    if (!bought.length) return 0;
+    const now = Date.now();
+    const items = new Map(this.items().map((i) => [i.id, i]));
+    const restocked = new Map<string, Item>();
+    for (const line of bought) {
+      const item = items.get(line.itemId as string);
+      if (item) restocked.set(item.id, { ...item, stock: item.stock + line.qty, updatedAt: now });
+    }
+    const ids = new Set(bought.map((l) => l.id));
+    this.items.update((all) => all.map((i) => restocked.get(i.id) ?? i));
+    this.listItems.update((all) => all.filter((l) => !ids.has(l.id)));
+    this.commit(
+      (db) => Promise.all([db.items.bulkPut([...restocked.values()]), db.listItems.bulkDelete([...ids])]),
+      [...[...restocked.values()].map((i) => this.outboxRow('item', i)), ...bought.map((l) => this.outboxRow('listitem', l, true, now))],
+    );
+    return restocked.size;
+  }
+
+  private saveListItem(line: ListItem): void {
+    const next = { ...line, updatedAt: Date.now() };
+    this.listItems.update((all) => (all.some((l) => l.id === next.id) ? all.map((l) => (l.id === next.id ? next : l)) : [...all, next]));
+    this.commit((db) => db.listItems.put(next), [this.outboxRow('listitem', next)]);
+  }
+
+  private removeListItems(ids: string[]): void {
+    const gone = this.listItems().filter((l) => ids.includes(l.id));
+    if (!gone.length) return;
+    const now = Date.now();
+    this.listItems.update((all) => all.filter((l) => !ids.includes(l.id)));
+    this.commit((db) => db.listItems.bulkDelete(gone.map((l) => l.id)), gone.map((l) => this.outboxRow('listitem', l, true, now)));
   }
 
   showToast(message: string): void {
@@ -340,7 +441,7 @@ export class Ledger {
     const queued = this.syncLinked() ? outbox : [];
     this.save(() =>
       this.db
-        .transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.outbox], async () => {
+        .transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.listItems, this.db.outbox], async () => {
           await work(this.db);
           if (queued.length) await this.enqueue(queued);
         })
@@ -348,7 +449,7 @@ export class Ledger {
     );
   }
 
-  private outboxRow(kind: RecordKind, record: Customer | Item | Entry, deleted = false, stamp?: number): OutboxRow {
+  private outboxRow(kind: RecordKind, record: Customer | Item | Entry | ListItem, deleted = false, stamp?: number): OutboxRow {
     const { updatedAt, ...data } = record as unknown as Record<string, unknown>;
     const at = stamp ?? (kind === 'entry' ? (record as Entry).date : (updatedAt as number | undefined) ?? 1);
     return { kind, id: record.id, updatedAt: at, deleted, data };
@@ -377,15 +478,17 @@ export class Ledger {
     });
   }
 
-  private async replaceAll(customers: Customer[], items: Item[], entries: Entry[]): Promise<void> {
+  private async replaceAll(customers: Customer[], items: Item[], entries: Entry[], listItems: ListItem[] = []): Promise<void> {
     this.customers.set(customers);
     this.items.set(items);
     this.entries.set(entries);
-    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.meta], async () => {
-      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear()]);
+    this.listItems.set(listItems);
+    await this.db.transaction('rw', [this.db.customers, this.db.items, this.db.entries, this.db.listItems, this.db.meta], async () => {
+      await Promise.all([this.db.customers.clear(), this.db.items.clear(), this.db.entries.clear(), this.db.listItems.clear()]);
       await this.db.customers.bulkPut(customers);
       await this.db.items.bulkPut(items);
       await this.db.entries.bulkPut(entries);
+      await this.db.listItems.bulkPut(listItems);
     });
     await this.saveProfile();
   }
