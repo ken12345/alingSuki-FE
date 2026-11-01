@@ -1,0 +1,12 @@
+<div class="app-shell">
+  <router-outlet />
+  @if (updateReady()) {
+    <div class="update-bar" role="status">
+      <span>A new version is ready.</span>
+      <button type="button" class="btn btn-sm btn-yellow" (click)="reload()">Update</button>
+    </div>
+  }
+  @if (ledger.toast(); as message) {
+    <div class="toast-lite" role="status">{{ message }}</div>
+  }
+</div>
