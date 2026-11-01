@@ -3,9 +3,10 @@ import { SwUpdate } from '@angular/service-worker';
 import { RouterOutlet } from '@angular/router';
 import { filter } from 'rxjs';
 import { Ledger } from './core/ledger';
+import { InstallHint } from './shared/install-hint';
 
 @Component({
-  imports: [RouterOutlet],
+  imports: [RouterOutlet, InstallHint],
   selector: 'app-root',
   templateUrl: './app.html',
 })

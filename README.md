@@ -1,59 +1,32 @@
-# App
+# Aling Suki
 
-This project was generated using [Angular CLI](https://github.com/angular/angular-cli) version 22.2.5.
+Mobile-first PWA for sari-sari stores: credit (utang) ledger, quick sales, items and stock, and a daily summary.
+Angular + Bootstrap. Data is stored on the device (IndexedDB) and the app works offline. Live at https://alingsuki.bitezy.online.
 
-## Development server
-
-To start a local development server, run:
-
-```bash
-ng serve
-```
-
-Once the server is running, open your browser and navigate to `http://localhost:4200/`. The application will automatically reload whenever you modify any of the source files.
-
-## Code scaffolding
-
-Angular CLI includes powerful code scaffolding tools. To generate a new component, run:
+## Develop
 
 ```bash
-ng generate component component-name
+npm install
+npm start          # http://localhost:4200 (service worker is off in dev)
+npm run build      # production build into dist/app/browser, with the service worker
 ```
 
-For a complete list of available schematics (such as `components`, `directives`, or `pipes`), run:
+## Deploy
 
-```bash
-ng generate --help
-```
+Hosted as a Cloudflare Worker serving static files (`wrangler.jsonc`, headers in `public/_headers`).
 
-## Building
+- **Automatic:** every push to `main` that builds cleanly is deployed by GitHub Actions (`.github/workflows/ci-cd.yml`),
+  then the workflow checks that the live site matches the build.
+- **By hand from this Mac:** `npm run deploy` (needs `wrangler login`).
+- **Roll back:** GitHub > Actions > CI/CD > Run workflow, paste a version ID from `npx wrangler versions list`.
 
-To build the project run:
+Pushes to `dev` and pull requests only build; they never deploy.
 
-```bash
-ng build
-```
+### One-time GitHub setup
 
-This will compile your project and store the build artifacts in the `dist/` directory. By default, the production build optimizes your application for performance and speed.
-
-## Running unit tests
-
-To execute unit tests with the [Vitest](https://vitest.dev/) test runner, use the following command:
-
-```bash
-ng test
-```
-
-## Running end-to-end tests
-
-For end-to-end (e2e) testing, run:
-
-```bash
-ng e2e
-```
-
-Angular CLI does not come with an end-to-end testing framework by default. You can choose one that suits your needs.
-
-## Additional Resources
-
-For more information on using the Angular CLI, including detailed command references, visit the [Angular CLI Overview and Command Reference](https://angular.dev/tools/cli) page.
+1. Cloudflare dashboard > My Profile > API Tokens > Create Token > use the **Edit Cloudflare Workers** template
+   (scope it to the account and the `bitezy.online` zone).
+2. GitHub repo > Settings > Secrets and variables > Actions > New repository secret:
+   - `CLOUDFLARE_API_TOKEN`: the token from step 1
+   - `CLOUDFLARE_ACCOUNT_ID`: your Cloudflare account ID (Workers & Pages > Overview, right side)
+3. Optional: Settings > Branches > protect `main` and require the **Build** check before merging.
