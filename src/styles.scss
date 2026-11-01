@@ -110,3 +110,5 @@ app-root { display: block; height: 100%; }
 .auth-logo { width: 130px; margin: 0 auto; display: block; }
 
 .update-bar { position: fixed; left: 50%; transform: translateX(-50%); top: 0; width: 100%; max-width: 480px; z-index: 50; background: var(--bs-body-color); color: #fff; display: flex; align-items: center; justify-content: space-between; gap: .75rem; padding: .5rem 1rem; font-weight: 600; font-size: .9rem; }
+
+.install-hint { position: fixed; left: 50%; transform: translateX(-50%); top: calc(.5rem + env(safe-area-inset-top)); width: calc(100% - 1rem); max-width: 464px; z-index: 45; display: flex; align-items: center; gap: .6rem; background: #fff; border: 1px solid var(--bs-border-color); border-radius: 1rem; padding: .55rem .7rem; box-shadow: 0 6px 20px rgba(60, 30, 20, .18); }
