@@ -27,6 +27,8 @@ export type AccountResult = { session: ApiSession } | { error: string; code?: st
 
 const LINK_KEY = 'link';
 const BATCH = 200;
+/** A push must stay under the server's 1 MB body limit; photos make some changes bigger, so batches are also capped by size. */
+const MAX_BATCH_CHARS = 500_000;
 const SOON_MS = 3_000;
 const POLL_MS = 120_000;
 /** Refresh the access token a little before it runs out. */
@@ -225,8 +227,15 @@ export class Sync {
 
   private async pushAll(): Promise<void> {
     for (;;) {
-      const rows = await this.db.outbox.orderBy('seq').limit(BATCH).toArray();
-      if (!rows.length) return;
+      const queued = await this.db.outbox.orderBy('seq').limit(BATCH).toArray();
+      if (!queued.length) return;
+      let size = 0;
+      const rows: OutboxRow[] = [];
+      for (const row of queued) {
+        size += JSON.stringify(row.data).length;
+        if (rows.length && size > MAX_BATCH_CHARS) break;
+        rows.push(row);
+      }
       try {
         await this.api.push(await this.accessToken(), rows.map(toChange));
       } catch (error) {
